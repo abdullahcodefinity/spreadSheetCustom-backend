@@ -1,0 +1,77 @@
+// schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int              @id @default(autoincrement())
+  name         String
+  email        String           @unique
+  password     String
+  role         String
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @default(now())
+  userSheets   UserSheet[]
+  permissions  UserPermission[]
+}
+
+model Sheet {
+  id         Int          @id @default(autoincrement())
+  name       String
+  columns    String[]
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @default(now())
+  userSheets UserSheet[]
+  sheetData  SheetData[]
+}
+
+model UserSheet {
+  id      Int    @id @default(autoincrement())
+  userId  Int
+  sheetId Int
+  role    String
+
+  user  User @relation(fields: [userId], references: [id])
+  sheet Sheet @relation(fields: [sheetId], references: [id])
+
+  @@unique([userId, sheetId])
+}
+
+model SheetData {
+  id            Int      @id @default(autoincrement())
+  spreadsheetId Int
+  position      Int
+  row           String[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now())
+
+  sheet Sheet @relation(fields: [spreadsheetId], references: [id])
+
+  @@unique([spreadsheetId, position])
+}
+
+model Permission {
+  id        Int              @id @default(autoincrement())
+  action    String
+  subject   String
+  users     UserPermission[]
+
+  @@unique([action, subject], name: "action_subject")
+}
+
+model UserPermission {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  permissionId Int
+
+  user       User       @relation(fields: [userId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([userId, permissionId], name: "userId_permissionId")
+}
