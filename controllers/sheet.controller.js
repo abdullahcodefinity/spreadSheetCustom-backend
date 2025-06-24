@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { defineAbilityFor } from '../lib/ability.js';
+import { defineAbilityFor, hasPermission } from '../lib/ability.js';
 
 
 const prismaClient = new PrismaClient();
@@ -8,6 +8,16 @@ export const createSheet = async (req, res) => {
   try {
     const { name, columns } = req.body;
     const userId = req.user.userId; // Get the current user's ID
+    const userPermissions = req.user.permissions;
+
+    // Check if user has create permission for sheets
+    const hasCreatePermission = hasPermission(userPermissions, 'create', 'sheet');
+
+
+
+    if (!hasCreatePermission) {
+      return res.status(403).json({ error: true, message: 'You do not have permission to create sheets' });
+    }
 
     // Validate input
     if (!name || !Array.isArray(columns)) {
@@ -59,7 +69,7 @@ export const createSheet = async (req, res) => {
       return { sheet, defaultRow };
     });
 
-    res.json(result.sheet);
+    res.json({data:result.sheet,message:"Sheet created successfully"});
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error creating sheet' });
