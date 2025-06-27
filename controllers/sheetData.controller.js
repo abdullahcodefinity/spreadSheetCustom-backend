@@ -155,6 +155,91 @@ export const updateSheetRowByPosition = async (req, res) => {
   }
 };
 
+// Move a row to a new position
+export const moveSheetRow = async (req, res) => {
+  try {
+    const { spreadsheetId } = req.params;
+    const { sourceIndex, targetIndex } = req.body;
+
+    // Validate indices
+    if (sourceIndex < 0 || targetIndex < 0) {
+      return res.status(400).json({ error: 'Source and target indices must be non-negative' });
+    }
+
+    // Find the row to move
+    const sourceRow = await prisma.sheetData.findFirst({
+      where: {
+        spreadsheetId: parseInt(spreadsheetId),
+        position: sourceIndex
+      }
+    });
+
+    if (!sourceRow) {
+      return res.status(404).json({ error: 'Source row not found' });
+    }
+
+    // Get all rows ordered by position
+    const allRows = await prisma.sheetData.findMany({
+      where: {
+        spreadsheetId: parseInt(spreadsheetId)
+      },
+      orderBy: {
+        position: 'asc'
+      }
+    });
+
+    if (targetIndex >= allRows.length) {
+      return res.status(400).json({ error: 'Target index exceeds number of rows' });
+    }
+
+    // Update positions in transaction
+    const updatedRows = await prisma.$transaction(async (tx) => {
+      // First move source row to a temporary position to avoid unique constraint conflicts
+      await tx.sheetData.update({
+        where: { id: sourceRow.id },
+        data: { position: -1 } // Temporary position
+      });
+
+      if (sourceIndex < targetIndex) {
+        // Moving down
+        for (let i = sourceIndex + 1; i <= targetIndex; i++) {
+          const rowToUpdate = allRows.find(row => row.position === i);
+          if (rowToUpdate) {
+            await tx.sheetData.update({
+              where: { id: rowToUpdate.id },
+              data: { position: i - 1 }
+            });
+          }
+        }
+      } else {
+        // Moving up
+        for (let i = sourceIndex - 1; i >= targetIndex; i--) {
+          const rowToUpdate = allRows.find(row => row.position === i);
+          if (rowToUpdate) {
+            await tx.sheetData.update({
+              where: { id: rowToUpdate.id },
+              data: { position: i + 1 }
+            });
+          }
+        }
+      }
+
+      // Finally move source row to target position
+      const movedRow = await tx.sheetData.update({
+        where: { id: sourceRow.id },
+        data: { position: targetIndex }
+      });
+
+      return movedRow;
+    });
+
+    res.json(updatedRows);
+  } catch (error) {
+    console.error('Error moving row:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // Delete a row by position
 export const deleteSheetRow = async (req, res) => {
   try {

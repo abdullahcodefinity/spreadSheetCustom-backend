@@ -12,6 +12,7 @@ router.use(authorize);
 router.post('/', controller.createSheetRow);
 router.get('/:spreadsheetId', controller.getSheetRows);
 router.put('/:spreadsheetId/position/:position', controller.updateSheetRowByPosition);
+router.put('/:spreadsheetId/move', controller.moveSheetRow);
 router.delete('/:sheetId/position/:position', controller.deleteSheetRow);
 
 export default router;

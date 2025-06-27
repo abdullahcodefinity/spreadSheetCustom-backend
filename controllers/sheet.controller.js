@@ -69,7 +69,7 @@ export const createSheet = async (req, res) => {
       return { sheet, defaultRow };
     });
 
-    res.json({data:result.sheet,message:"Sheet created successfully"});
+    res.json({ data: result.sheet, message: "Sheet created successfully" });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error creating sheet' });
@@ -162,7 +162,12 @@ export const getSheet = async (req, res) => {
         id: Number(id)
       },
       include: {
-        sheetData: true
+        sheetData: true,
+        columnDropdowns: {
+          include: {
+            valueSet: true,
+          },
+        }
       }
     });
 
@@ -241,7 +246,6 @@ export const updateSheet = async (req, res) => {
     res.status(500).json({ error: 'Error updating sheet' });
   }
 };
-
 export const updateSheetColumns = async (req, res) => {
   try {
     const { id } = req.params;
@@ -298,16 +302,21 @@ export const updateSheetColumns = async (req, res) => {
     }
 
     // Only allow one operation at a time to avoid complexity
-    const operationCount = [insertAtIndex, deleteAtIndex, updateAtIndex].filter(idx => typeof idx === "number").length;
+    const operationCount = [
+      insertAtIndex,
+      deleteAtIndex,
+      updateAtIndex
+    ].filter(idx => typeof idx === "number").length;
+
     if (operationCount > 1) {
-      return res.status(400).json({ 
-        message: "Cannot perform multiple operations simultaneously. Please perform one at a time." 
+      return res.status(400).json({
+        message: "Cannot perform multiple operations simultaneously. Please perform one at a time."
       });
     }
 
     if (operationCount === 0) {
-      return res.status(400).json({ 
-        message: "No operation specified. Provide insertAtIndex, deleteAtIndex, or updateAtIndex." 
+      return res.status(400).json({
+        message: "No operation specified. Provide insertAtIndex, deleteAtIndex, or updateAtIndex."
       });
     }
 
@@ -338,19 +347,14 @@ export const updateSheetColumns = async (req, res) => {
       for (const row of sheet.sheetData) {
         let updatedRow = [...row.row];
 
-        // Apply same operations to row data (only for insert/delete, not update)
-        // Insert operation - add empty cell
+        // Apply same operations to row data
         if (typeof insertAtIndex === "number" && newColumnName) {
           updatedRow.splice(insertAtIndex, 0, "");
         }
 
-        // Delete operation - remove cell data
         if (typeof deleteAtIndex === "number") {
           updatedRow.splice(deleteAtIndex, 1);
         }
-
-        // Update operation doesn't change row data, only column headers
-        // So we only update row data for insert/delete operations
 
         if (typeof insertAtIndex === "number" || typeof deleteAtIndex === "number") {
           await tx.sheetData.update({
@@ -369,6 +373,113 @@ export const updateSheetColumns = async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
+export const moveSheetColumn = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sourceIndex, targetIndex } = req.body;
+
+    const { permissions } = req.user;
+    const ability = defineAbilityFor({ permissions });
+
+    if (!ability.can("update", "Sheet")) {
+      return res.status(403).json({ message: "You do not have permission to update sheets" });
+    }
+
+    const sheet = await prismaClient.sheet.findUnique({
+      where: { id: Number(id) },
+      include: { sheetData: true }
+    });
+
+    if (!sheet) {
+      return res.status(404).json({ message: "Sheet not found" });
+    }
+
+    let updatedColumns = [...sheet.columns];
+
+    // Validate sourceIndex and targetIndex
+    if (sourceIndex < 0 || sourceIndex >= updatedColumns.length ||
+      targetIndex < 0 || targetIndex >= updatedColumns.length) {
+      return res.status(400).json({ message: "Invalid source or target index" });
+    }
+
+    // Remove column from source position
+    const [columnToMove] = updatedColumns.splice(sourceIndex, 1);
+
+    // Insert at target position
+    updatedColumns.splice(targetIndex, 0, columnToMove);
+
+    const updatedSheet = await prismaClient.$transaction(async (tx) => {
+      // Update columns array
+      const updated = await tx.sheet.update({
+        where: { id: Number(id) },
+        data: { columns: updatedColumns },
+        include: { sheetData: true }
+      });
+
+      // Update all existing rows
+      for (const row of sheet.sheetData) {
+        let updatedRow = [...row.row];
+        const [valueToMove] = updatedRow.splice(sourceIndex, 1);
+        updatedRow.splice(targetIndex, 0, valueToMove);
+
+        await tx.sheetData.update({
+          where: { id: row.id },
+          data: { row: updatedRow }
+        });
+      }
+
+      return updated;
+    });
+
+    res.json(updatedSheet);
+  } catch (error) {
+    console.error("Error moving sheet column:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const attachDropdown = async (req, res) => {
+  try {
+    const { id: sheetId } = req.params;
+    const { valueSetId,columnName } = req.body;
+    // const { permissions } = req.user;
+
+    // const ability = defineAbilityFor({ permissions });
+
+    // if (!ability.can('update', 'Sheet')) {
+    //   return res.status(403).json({
+    //     error: true,
+    //     message: 'You do not have permission to update sheets'
+    //   });
+    // }
+
+    const dropdown = await prismaClient.columnDropdown.upsert({
+      where: {
+        sheetId_columnName: {
+          sheetId: Number(sheetId),
+          columnName
+        }
+      },
+      update: { valueSetId },
+      create: {
+        columnName,
+        sheetId: Number(sheetId),
+        valueSetId,
+      }
+    });
+
+    res.json({
+      error: false,
+      data: dropdown,
+      message: 'Column dropdown updated successfully'
+    });
+  } catch (error) {
+    console.error('Error attaching dropdown:', error);
+    res.status(500).json({ error: true, message: 'Error attaching dropdown to column' });
+  }
+};
+
 
 export const deleteSheet = async (req, res) => {
   try {
@@ -398,13 +509,16 @@ export const deleteSheet = async (req, res) => {
       });
     }
 
-    // First delete related records in userSheets and sheetData
+    // First delete related records in userSheets, sheetData and columnDropdowns
     await prismaClient.$transaction([
       prismaClient.userSheet.deleteMany({
         where: { sheetId: Number(id) }
       }),
       prismaClient.sheetData.deleteMany({
         where: { spreadsheetId: Number(id) }
+      }),
+      prismaClient.columnDropdown.deleteMany({
+        where: { sheetId: Number(id) }
       }),
       // Then delete the sheet
       prismaClient.sheet.delete({

@@ -1,7 +1,5 @@
-import bcrypt from 'bcrypt'
-
+import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
-
 
 const prisma = new PrismaClient();
 
@@ -13,6 +11,7 @@ async function main() {
   await prisma.sheetData.deleteMany();
   await prisma.sheet.deleteMany();
   await prisma.user.deleteMany();
+  await prisma.valueSet.deleteMany(); // ✅ Reset ValueSet too
 
   // Create Super Admin
   const hashedPassword = await bcrypt.hash('12345678', 10);
@@ -24,6 +23,16 @@ async function main() {
       role: 'SuperAdmin',
     },
   });
+
+  // Seed Value Sets
+  await prisma.valueSet.create({
+    data: {
+      name: "Status Options",
+      values: ["Active", "Inactive", "Pending"],
+    },
+  });
+
+  console.log('🌱 ValueSet "Status Options" seeded');
 
   // Permissions
   const permissions = [
@@ -37,12 +46,12 @@ async function main() {
     { action: 'delete', subject: 'sheetData' },
     { action: 'read', subject: 'sheetData' },
     { action: 'manage', subject: 'user' },
+    { action: 'updateColumnHeader', subject: 'sheet' },
+    { action: 'addColumn', subject: 'sheet' },
   ];
 
   for (const perm of permissions) {
-    const permission = await prisma.permission.create({
-      data: perm,
-    });
+    const permission = await prisma.permission.create({ data: perm });
 
     await prisma.userPermission.create({
       data: {

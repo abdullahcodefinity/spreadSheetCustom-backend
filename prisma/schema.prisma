@@ -1,4 +1,4 @@
-// schema.prisma
+// Updated schema.prisma
 
 generator client {
   provider = "prisma-client-js"
@@ -22,13 +22,14 @@ model User {
 }
 
 model Sheet {
-  id         Int          @id @default(autoincrement())
-  name       String
-  columns    String[]
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @default(now())
-  userSheets UserSheet[]
-  sheetData  SheetData[]
+  id              Int               @id @default(autoincrement())
+  name            String
+  columns         String[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @default(now())
+  userSheets      UserSheet[]
+  sheetData       SheetData[]
+  columnDropdowns ColumnDropdown[]
 }
 
 model UserSheet {
@@ -63,6 +64,25 @@ model Permission {
   users     UserPermission[]
 
   @@unique([action, subject], name: "action_subject")
+}
+
+model ValueSet {
+  id     Int      @id @default(autoincrement())
+  name   String
+  values String[]
+  columnDropdowns ColumnDropdown[]
+}
+
+model ColumnDropdown {
+  id          Int      @id @default(autoincrement())
+  columnName  String
+  sheetId     Int
+  valueSetId  Int
+
+  sheet       Sheet     @relation(fields: [sheetId], references: [id])
+  valueSet    ValueSet  @relation(fields: [valueSetId], references: [id])
+
+  @@unique([sheetId, columnName])
 }
 
 model UserPermission {
