@@ -15,6 +15,7 @@ router.put('/:id', controller.updateSheet);
 router.put('/:id/columns', controller.updateSheetColumns);
 router.put('/:id/columns/move', controller.moveSheetColumn);
 router.put('/:id/columns/dropdown', controller.attachDropdown);
+router.put('/:id/columns/dropdown/remove', controller.removeDropdown);
 
 router.delete('/:id', controller.deleteSheet);
 

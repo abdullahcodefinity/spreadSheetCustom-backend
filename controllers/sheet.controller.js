@@ -480,6 +480,57 @@ export const attachDropdown = async (req, res) => {
   }
 };
 
+export const removeDropdown = async (req, res) => {
+  try {
+    const { id: sheetId } = req.params;
+    const { columnName } = req.body;
+    // const { permissions } = req.user;
+
+    // const ability = defineAbilityFor({ permissions });
+
+    // if (!ability.can('update', 'Sheet')) {
+    //   return res.status(403).json({
+    //     error: true,
+    //     message: 'You do not have permission to update sheets'
+    //   });
+    // }
+
+    // Check if the dropdown exists
+    const existingDropdown = await prismaClient.columnDropdown.findUnique({
+      where: {
+        sheetId_columnName: {
+          sheetId: Number(sheetId),
+          columnName
+        }
+      }
+    });
+
+    if (!existingDropdown) {
+      return res.status(404).json({
+        error: true,
+        message: 'No dropdown found for this column'
+      });
+    }
+
+    // Delete the dropdown
+    await prismaClient.columnDropdown.delete({
+      where: {
+        sheetId_columnName: {
+          sheetId: Number(sheetId),
+          columnName
+        }
+      }
+    });
+
+    res.json({
+      error: false,
+      message: 'Column dropdown removed successfully'
+    });
+  } catch (error) {
+    console.error('Error removing dropdown:', error);
+    res.status(500).json({ error: true, message: 'Error removing dropdown from column' });
+  }
+};
 
 export const deleteSheet = async (req, res) => {
   try {
