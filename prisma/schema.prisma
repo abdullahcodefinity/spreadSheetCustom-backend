@@ -1,5 +1,3 @@
-// Updated schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,6 +5,15 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum SheetPermissionType {
+  addColumn
+  deleteColumn
+  updateColumn
+  addRow
+  deleteRow
+  updateRow
 }
 
 model User {
@@ -18,7 +25,7 @@ model User {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @default(now())
   userSheets   UserSheet[]
-  permissions  UserPermission[]
+  // Removed: permissions  UserPermission[]
 }
 
 model Sheet {
@@ -33,15 +40,24 @@ model Sheet {
 }
 
 model UserSheet {
-  id      Int    @id @default(autoincrement())
-  userId  Int
-  sheetId Int
-  role    String
-
-  user  User @relation(fields: [userId], references: [id])
-  sheet Sheet @relation(fields: [sheetId], references: [id])
+  id         Int               @id @default(autoincrement())
+  userId     Int
+  sheetId    Int
+  role       String
+  sheet      Sheet             @relation(fields: [sheetId], references: [id])
+  user       User              @relation(fields: [userId], references: [id])
+  permissions SheetPermission[] // ✅ Normalized permissions per sheet
 
   @@unique([userId, sheetId])
+}
+
+model SheetPermission {
+  id           Int                @id @default(autoincrement())
+  userSheet    UserSheet          @relation(fields: [userSheetId], references: [id])
+  userSheetId  Int
+  type         SheetPermissionType
+
+  @@unique([userSheetId, type]) // One type per user per sheet
 }
 
 model SheetData {
@@ -52,24 +68,15 @@ model SheetData {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @default(now())
 
-  sheet Sheet @relation(fields: [spreadsheetId], references: [id])
+  sheet         Sheet     @relation(fields: [spreadsheetId], references: [id])
 
   @@unique([spreadsheetId, position])
 }
 
-model Permission {
-  id        Int              @id @default(autoincrement())
-  action    String
-  subject   String
-  users     UserPermission[]
-
-  @@unique([action, subject], name: "action_subject")
-}
-
 model ValueSet {
-  id     Int      @id @default(autoincrement())
-  name   String
-  values String[]
+  id              Int               @id @default(autoincrement())
+  name            String
+  values          String[]
   columnDropdowns ColumnDropdown[]
 }
 
@@ -83,15 +90,4 @@ model ColumnDropdown {
   valueSet    ValueSet  @relation(fields: [valueSetId], references: [id])
 
   @@unique([sheetId, columnName])
-}
-
-model UserPermission {
-  id           Int      @id @default(autoincrement())
-  userId       Int
-  permissionId Int
-
-  user       User       @relation(fields: [userId], references: [id])
-  permission Permission @relation(fields: [permissionId], references: [id])
-
-  @@unique([userId, permissionId], name: "userId_permissionId")
 }

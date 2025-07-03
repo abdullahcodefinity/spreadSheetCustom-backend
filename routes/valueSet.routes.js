@@ -7,7 +7,7 @@ const router = express.Router();
 // Apply authorization middleware to all routes
 router.use(authorize);
 
-// ValueSet CRUD routes
+// ValueSet CRUD
 router.post('/', controller.createValueSet);
 router.get('/', controller.getValueSets);
 router.get('/:id', controller.getValueSet);

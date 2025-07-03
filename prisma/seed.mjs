@@ -1,19 +1,19 @@
 import bcrypt from 'bcrypt';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'; // Removed SheetPermissionType since not used
 
 const prisma = new PrismaClient();
 
 async function main() {
-  // Reset database
-  await prisma.userPermission.deleteMany();
-  await prisma.permission.deleteMany();
+  // 🔄 Reset database
+  await prisma.sheetPermission.deleteMany();
+  await prisma.columnDropdown.deleteMany();
+  await prisma.valueSet.deleteMany();
   await prisma.userSheet.deleteMany();
   await prisma.sheetData.deleteMany();
   await prisma.sheet.deleteMany();
   await prisma.user.deleteMany();
-  await prisma.valueSet.deleteMany(); // ✅ Reset ValueSet too
 
-  // Create Super Admin
+  // 🧑‍💼 Create Super Admin
   const hashedPassword = await bcrypt.hash('12345678', 10);
   const superAdmin = await prisma.user.create({
     data: {
@@ -24,7 +24,7 @@ async function main() {
     },
   });
 
-  // Seed Value Sets
+  // 🌈 Seed ValueSet
   await prisma.valueSet.create({
     data: {
       name: "Status Options",
@@ -32,36 +32,7 @@ async function main() {
     },
   });
 
-  console.log('🌱 ValueSet "Status Options" seeded');
-
-  // Permissions
-  const permissions = [
-    { action: 'manage', subject: 'all' },
-    { action: 'create', subject: 'sheet' },
-    { action: 'read', subject: 'sheet' },
-    { action: 'update', subject: 'sheet' },
-    { action: 'delete', subject: 'sheet' },
-    { action: 'create', subject: 'sheetData' },
-    { action: 'update', subject: 'sheetData' },
-    { action: 'delete', subject: 'sheetData' },
-    { action: 'read', subject: 'sheetData' },
-    { action: 'manage', subject: 'user' },
-    { action: 'updateColumnHeader', subject: 'sheet' },
-    { action: 'addColumn', subject: 'sheet' },
-  ];
-
-  for (const perm of permissions) {
-    const permission = await prisma.permission.create({ data: perm });
-
-    await prisma.userPermission.create({
-      data: {
-        userId: superAdmin.id,
-        permissionId: permission.id,
-      },
-    });
-  }
-
-  console.log(`🌱 Super Admin seeded with ${permissions.length} permissions`);
+  console.log('✅ Super Admin and ValueSet created without seeding any Sheet or SheetPermissions');
 }
 
 main()

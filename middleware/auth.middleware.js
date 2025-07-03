@@ -15,8 +15,7 @@ export const authorize = async (req, res, next) => {
 
       req.user = {
         userId: decoded.userId,
-        role: decoded.role,
-        permissions: decoded.permissions
+        role: decoded.role
       };
       next();
     } catch (error) {

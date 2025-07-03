@@ -1,22 +1,17 @@
 import { PrismaClient } from '@prisma/client';
-import { defineAbilityFor, hasPermission } from '../lib/ability.js';
 
 
-const prismaClient = new PrismaClient();
+const prisma = new PrismaClient();
 
 export const createSheet = async (req, res) => {
   try {
     const { name, columns } = req.body;
     const userId = req.user.userId; // Get the current user's ID
-    const userPermissions = req.user.permissions;
+    const userRole = req.user.role;
 
-    // Check if user has create permission for sheets
-    const hasCreatePermission = hasPermission(userPermissions, 'create', 'sheet');
-
-
-
-    if (!hasCreatePermission) {
-      return res.status(403).json({ error: true, message: 'You do not have permission to create sheets' });
+    // Check if user is SuperAdmin
+    if (userRole !== 'SuperAdmin') {
+      return res.status(403).json({ error: true, message: 'Only SuperAdmin can create sheets' });
     }
 
     // Validate input
@@ -25,9 +20,9 @@ export const createSheet = async (req, res) => {
     }
 
     // Create sheet, default row, and user-sheet relationship in a transaction
-    const result = await prismaClient.$transaction(async (prisma) => {
-      // Create the sheet
-      const sheet = await prisma.sheet.create({
+    const result = await prisma.$transaction(async (tx) => {
+              // Create the sheet
+        const sheet = await tx.sheet.create({
         data: {
           name,
           columns,
@@ -54,7 +49,7 @@ export const createSheet = async (req, res) => {
       });
 
       // Create default row with N/A
-      const defaultRow = await prisma.sheetData.create({
+      const defaultRow = await tx.sheetData.create({
         data: {
           position: 0,
           row: Array(columns.length).fill('N/A'),
@@ -80,7 +75,6 @@ export const getSheets = async (req, res) => {
   try {
     const userId = req.user.userId;
     const userRole = req.user.role;
-    const userPermissions = req.user.permissions;
     const { search } = req.query; // Get search query from request
 
     // Build search condition if search query exists
@@ -93,7 +87,7 @@ export const getSheets = async (req, res) => {
 
     // If user is super admin, return all sheets
     if (userRole === 'SuperAdmin') {
-      const sheets = await prismaClient.sheet.findMany({
+      const sheets = await prisma.sheet.findMany({
         where: searchCondition,
         include: {
           sheetData: true,
@@ -105,7 +99,8 @@ export const getSheets = async (req, res) => {
                   name: true,
                   email: true
                 }
-              }
+              },
+              permissions: true // Remove nested include of type
             }
           }
         }
@@ -113,27 +108,23 @@ export const getSheets = async (req, res) => {
       return res.json(sheets);
     }
 
-    // Check if user has read permission for sheets
-    const hasReadPermission = userPermissions.some(
-      p => p.action === 'read' && p.subject === 'Sheet'
-    );
-
-    if (!hasReadPermission) {
-      return res.status(403).json({ error: true, message: 'You do not have permission to view sheets' });
-    }
-
-    // For regular users, return only their own sheets
-    const sheets = await prismaClient.sheet.findMany({
+    // For regular users, return only sheets they have access to
+    const sheets = await prisma.sheet.findMany({
       where: {
-        AND: [
-          { userSheets: { some: { userId: userId } } },
-          searchCondition
-        ]
+        userSheets: {
+          some: {
+            userId: userId
+          }
+        },
+        ...searchCondition
       },
       include: {
         sheetData: true,
         userSheets: {
-          include: {
+          where: { userId: userId },
+          select: {
+            role: true,
+            permissions: true, // Remove nested include of type
             user: {
               select: {
                 id: true,
@@ -156,8 +147,25 @@ export const getSheets = async (req, res) => {
 export const getSheet = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
-    const sheet = await prismaClient.sheet.findFirst({
+    // Check if user is SuperAdmin or has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      // Check if user has access to this specific sheet
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(id)
+        }
+      });
+
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
+    }
+
+    const sheet = await prisma.sheet.findFirst({
       where: {
         id: Number(id)
       },
@@ -167,6 +175,20 @@ export const getSheet = async (req, res) => {
           include: {
             valueSet: true,
           },
+        },
+        userSheets: {
+          where: { userId: userId },
+          select: {
+            role: true,
+            permissions: true,
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
         }
       }
     });
@@ -185,77 +207,89 @@ export const getSheet = async (req, res) => {
 export const updateSheet = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, ownerId } = req.body;
-    const currentUserId = req.user.userId; // Assumes you have auth middleware
+    const { name } = req.body;
+    const userRole = req.user.role;
 
-    // Start a transaction
-    const result = await prismaClient.$transaction(async (prisma) => {
-      // Update the sheet name if provided
-      const updatedSheet = await prisma.sheet.update({
-        where: { id: Number(id) },
-        data: name ? { name } : {},
-        include: {
-          sheetData: true,
-          userSheets: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true
-                }
+    // Check if user is SuperAdmin
+    if (userRole !== 'SuperAdmin') {
+      return res.status(403).json({ 
+        error: true, 
+        message: 'Only SuperAdmin can update sheet name' 
+      });
+    }
+
+    // Update the sheet name if provided
+    const updatedSheet = await prisma.sheet.update({
+      where: { id: Number(id) },
+      data: name ? { name } : {},
+      include: {
+        sheetData: true,
+        userSheets: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
               }
             }
           }
         }
-      });
-
-      // If ownerId is provided and is different from the current owner
-      if (ownerId && Number(ownerId) !== currentUserId) {
-        // Remove current user's access to the sheet
-        await prisma.userSheet.deleteMany({
-          where: {
-            sheetId: Number(id),
-            userId: currentUserId
-          }
-        });
-
-        // Upsert (add or update) the new owner
-        await prisma.userSheet.upsert({
-          where: {
-            userId_sheetId: {
-              userId: Number(ownerId),
-              sheetId: Number(id)
-            }
-          },
-          update: { role: 'OWNER' },
-          create: {
-            userId: Number(ownerId),
-            sheetId: Number(id),
-            role: 'OWNER'
-          }
-        });
       }
-
-      return updatedSheet;
     });
 
-    res.json(result);
+    res.json(updatedSheet);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error updating sheet' });
   }
 };
+
 export const updateSheetColumns = async (req, res) => {
   try {
     const { id } = req.params;
     const { newColumnName, insertAtIndex, deleteAtIndex, updateAtIndex } = req.body;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
-    const { permissions } = req.user;
-    const ability = defineAbilityFor({ permissions });
+    // Check if user is SuperAdmin or has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      // Check if user has access to this specific sheet
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(id)
+        },
+        include: {
+          permissions: true
+        }
+      });
 
-    if (!ability.can("update", "Sheet")) {
-      return res.status(403).json({ message: "You do not have permission to update sheets" });
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
+
+      // Check specific permissions based on operation
+      if (typeof insertAtIndex === "number") {
+        const hasAddPermission = userSheet.permissions.some(p => p.type === 'addColumn');
+        if (!hasAddPermission) {
+          return res.status(403).json({ message: "You do not have permission to add columns" });
+        }
+      }
+
+      if (typeof deleteAtIndex === "number") {
+        const hasDeletePermission = userSheet.permissions.some(p => p.type === 'deleteColumn');
+        if (!hasDeletePermission) {
+          return res.status(403).json({ message: "You do not have permission to delete columns" });
+        }
+      }
+
+      if (typeof updateAtIndex === "number") {
+        const hasUpdatePermission = userSheet.permissions.some(p => p.type === 'updateColumn');
+        if (!hasUpdatePermission) {
+          return res.status(403).json({ message: "You do not have permission to update columns" });
+        }
+      }
     }
 
     // Validate inputs
@@ -271,7 +305,7 @@ export const updateSheetColumns = async (req, res) => {
       return res.status(400).json({ message: "Invalid insertAtIndex: must be non-negative" });
     }
 
-    const sheet = await prismaClient.sheet.findUnique({
+    const sheet = await prisma.sheet.findUnique({
       where: { id: Number(id) },
       include: { sheetData: true }
     });
@@ -335,7 +369,7 @@ export const updateSheetColumns = async (req, res) => {
       updatedColumns[updateAtIndex] = newColumnName;
     }
 
-    const updatedSheet = await prismaClient.$transaction(async (tx) => {
+    const updatedSheet = await prisma.$transaction(async (tx) => {
       // Update columns array
       const updated = await tx.sheet.update({
         where: { id: Number(id) },
@@ -378,15 +412,37 @@ export const moveSheetColumn = async (req, res) => {
   try {
     const { id } = req.params;
     const { sourceIndex, targetIndex } = req.body;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
-    const { permissions } = req.user;
-    const ability = defineAbilityFor({ permissions });
+    // Check if user is SuperAdmin or has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      // Check if user has access to this specific sheet
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(id)
+        },
+        include: {
+          permissions: true
+        }
+      });
 
-    if (!ability.can("update", "Sheet")) {
-      return res.status(403).json({ message: "You do not have permission to update sheets" });
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
+
+      // Check if user has column update permissions
+      const hasColumnPermission = userSheet.permissions.some(
+        p => p.type === 'updateColumn'
+      );
+
+      if (!hasColumnPermission) {
+        return res.status(403).json({ message: "You do not have permission to move columns" });
+      }
     }
 
-    const sheet = await prismaClient.sheet.findUnique({
+    const sheet = await prisma.sheet.findUnique({
       where: { id: Number(id) },
       include: { sheetData: true }
     });
@@ -409,7 +465,7 @@ export const moveSheetColumn = async (req, res) => {
     // Insert at target position
     updatedColumns.splice(targetIndex, 0, columnToMove);
 
-    const updatedSheet = await prismaClient.$transaction(async (tx) => {
+    const updatedSheet = await prisma.$transaction(async (tx) => {
       // Update columns array
       const updated = await tx.sheet.update({
         where: { id: Number(id) },
@@ -442,19 +498,36 @@ export const moveSheetColumn = async (req, res) => {
 export const attachDropdown = async (req, res) => {
   try {
     const { id: sheetId } = req.params;
-    const { valueSetId,columnName } = req.body;
-    // const { permissions } = req.user;
+    const { valueSetId, columnName } = req.body;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
-    // const ability = defineAbilityFor({ permissions });
+    // Check if user is SuperAdmin or has update column permission
+    if (userRole !== 'SuperAdmin') {
+      // Check if user has access to this specific sheet
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(sheetId)
+        },
+        include: {
+          permissions: true
+        }
+      });
 
-    // if (!ability.can('update', 'Sheet')) {
-    //   return res.status(403).json({
-    //     error: true,
-    //     message: 'You do not have permission to update sheets'
-    //   });
-    // }
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
 
-    const dropdown = await prismaClient.columnDropdown.upsert({
+      // Check if user has column update permission
+      const hasUpdatePermission = userSheet.permissions.some(p => p.type === 'updateColumn');
+
+      if (!hasUpdatePermission) {
+        return res.status(403).json({ message: "You do not have permission to update columns" });
+      }
+    }
+
+    const dropdown = await prisma.columnDropdown.upsert({
       where: {
         sheetId_columnName: {
           sheetId: Number(sheetId),
@@ -484,19 +557,36 @@ export const removeDropdown = async (req, res) => {
   try {
     const { id: sheetId } = req.params;
     const { columnName } = req.body;
-    // const { permissions } = req.user;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
-    // const ability = defineAbilityFor({ permissions });
+    // Check if user is SuperAdmin or has update column permission
+    if (userRole !== 'SuperAdmin') {
+      // Check if user has access to this specific sheet
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(sheetId)
+        },
+        include: {
+          permissions: true
+        }
+      });
 
-    // if (!ability.can('update', 'Sheet')) {
-    //   return res.status(403).json({
-    //     error: true,
-    //     message: 'You do not have permission to update sheets'
-    //   });
-    // }
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
+
+      // Check if user has column update permission
+      const hasUpdatePermission = userSheet.permissions.some(p => p.type === 'updateColumn');
+
+      if (!hasUpdatePermission) {
+        return res.status(403).json({ message: "You do not have permission to update columns" });
+      }
+    }
 
     // Check if the dropdown exists
-    const existingDropdown = await prismaClient.columnDropdown.findUnique({
+    const existingDropdown = await prisma.columnDropdown.findUnique({
       where: {
         sheetId_columnName: {
           sheetId: Number(sheetId),
@@ -513,7 +603,7 @@ export const removeDropdown = async (req, res) => {
     }
 
     // Delete the dropdown
-    await prismaClient.columnDropdown.delete({
+    await prisma.columnDropdown.delete({
       where: {
         sheetId_columnName: {
           sheetId: Number(sheetId),
@@ -535,21 +625,18 @@ export const removeDropdown = async (req, res) => {
 export const deleteSheet = async (req, res) => {
   try {
     const { id } = req.params;
-    const { permissions } = req.user; // Get permissions from JWT token
+    const userRole = req.user.role;
 
-    // Create ability instance
-    const ability = defineAbilityFor({ permissions });
-
-    // Check if user has permission to delete sheets
-    if (!ability.can('delete', 'Sheet')) {
+    // Only SuperAdmin can delete sheets
+    if (userRole !== 'SuperAdmin') {
       return res.status(403).json({
         error: true,
-        message: 'You do not have permission to delete sheets'
+        message: 'Only SuperAdmin can delete sheets'
       });
     }
 
     // Check if sheet exists
-    const existingSheet = await prismaClient.sheet.findUnique({
+    const existingSheet = await prisma.sheet.findUnique({
       where: { id: Number(id) }
     });
 
@@ -560,19 +647,29 @@ export const deleteSheet = async (req, res) => {
       });
     }
 
-    // First delete related records in userSheets, sheetData and columnDropdowns
-    await prismaClient.$transaction([
-      prismaClient.userSheet.deleteMany({
+    // First delete related records in order to handle foreign key constraints
+    await prisma.$transaction([
+      // First delete permissions since they reference userSheets
+      prisma.sheetPermission.deleteMany({
+        where: {
+          userSheet: {
+            sheetId: Number(id)
+          }
+        }
+      }),
+      // Then delete userSheets
+      prisma.userSheet.deleteMany({
         where: { sheetId: Number(id) }
       }),
-      prismaClient.sheetData.deleteMany({
+      // Delete other related records
+      prisma.sheetData.deleteMany({
         where: { spreadsheetId: Number(id) }
       }),
-      prismaClient.columnDropdown.deleteMany({
+      prisma.columnDropdown.deleteMany({
         where: { sheetId: Number(id) }
       }),
-      // Then delete the sheet
-      prismaClient.sheet.delete({
+      // Finally delete the sheet
+      prisma.sheet.delete({
         where: { id: Number(id) }
       })
     ]);
@@ -590,5 +687,245 @@ export const deleteSheet = async (req, res) => {
   }
 };
 
+export const shareSheet = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { users, permissions } = req.body;
+    const currentUserRole = req.user.role;
+
+    if (currentUserRole !== 'SuperAdmin') {
+      return res.status(403).json({ error: true, message: 'Only SuperAdmin can manage sheet access.' });
+    }
+
+    // Validate users array
+    if (!Array.isArray(users) || users.length === 0) {
+      return res.status(400).json({ error: true, message: 'Users array is required.' });
+    }
+
+    // Validate permissions if provided
+    if (permissions) {
+      const validPermissions = [
+        'addColumn',
+        'deleteColumn',
+        'updateColumn', 
+        'addRow',
+        'deleteRow',
+        'updateRow'
+      ];
+
+      const invalidPermissions = permissions.filter(p => !validPermissions.includes(p));
+      if (invalidPermissions.length > 0) {
+        return res.status(400).json({
+          error: true,
+          message: `Invalid permissions: ${invalidPermissions.join(', ')}`
+        });
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const user of users) {
+        if (!user.userId || !user.role) continue;
+
+        // Create or update userSheet
+        await tx.userSheet.upsert({
+          where: {
+            userId_sheetId: {
+              userId: Number(user.userId),
+              sheetId: Number(id)
+            }
+          },
+          update: { 
+            role: user.role
+          },
+          create: {
+            userId: Number(user.userId),
+            sheetId: Number(id),
+            role: user.role
+          }
+        });
+
+        // Always fetch the latest userSheet after upsert
+        const userSheet = await tx.userSheet.findUnique({
+          where: {
+            userId_sheetId: {
+              userId: Number(user.userId),
+              sheetId: Number(id)
+            }
+          }
+        });
+
+        // If permissions are provided, update them
+        if (permissions && permissions.length > 0) {
+          // Delete existing permissions for this userSheet
+          await tx.sheetPermission.deleteMany({
+            where: { userSheetId: userSheet.id }
+          });
+
+          // Create new permissions
+          for (const permissionType of permissions) {
+            await tx.sheetPermission.create({
+              data: {
+                userSheetId: userSheet.id,
+                type: permissionType
+              }
+            });
+          }
+        }
+      }
+    });
+
+    // Return updated user access list with permissions
+    const userSheets = await prisma.userSheet.findMany({
+      where: { sheetId: Number(id) },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        },
+        permissions: true
+      }
+    });
+
+    res.json({ 
+      error: false, 
+      userSheets, 
+      message: 'Sheet access and permissions updated successfully.' 
+    });
+
+  } catch (error) {
+    console.error('Error managing sheet access:', error);
+    res.status(500).json({ 
+      error: true, 
+      message: 'Error managing sheet access and permissions.' 
+    });
+  }
+};
+
+export const updateSheetPermissions = async (req, res) => {
+  try {
+    const { id } = req.params; // sheetId
+    const { userId, permissions } = req.body;
+    const currentUserRole = req.user.role;
+
+    if (currentUserRole !== 'SuperAdmin') {
+      return res.status(403).json({ error: true, message: 'Only SuperAdmin can update permissions.' });
+    }
+
+    // Validate input
+    if (!userId || !Array.isArray(permissions)) {
+      return res.status(400).json({ error: true, message: 'userId and permissions array are required.' });
+    }
+
+    const validPermissions = [
+      'addColumn',
+      'deleteColumn',
+      'updateColumn', 
+      'addRow',
+      'deleteRow',
+      'updateRow'
+    ];
+    const invalidPermissions = permissions.filter(p => !validPermissions.includes(p));
+    if (invalidPermissions.length > 0) {
+      return res.status(400).json({
+        error: true,
+        message: `Invalid permissions: ${invalidPermissions.join(', ')}`
+      });
+    }
+
+    // Find the userSheet
+    const userSheet = await prisma.userSheet.findUnique({
+      where: {
+        userId_sheetId: {
+          userId: Number(userId),
+          sheetId: Number(id)
+        }
+      }
+    });
+
+    if (!userSheet) {
+      return res.status(404).json({ error: true, message: 'User does not have access to this sheet.' });
+    }
+
+    // Update permissions in a transaction
+    await prisma.$transaction([
+      prisma.sheetPermission.deleteMany({
+        where: { userSheetId: userSheet.id }
+      }),
+      ...permissions.map(type =>
+        prisma.sheetPermission.create({
+          data: {
+            userSheetId: userSheet.id,
+            type
+          }
+        })
+      )
+    ]);
+
+    // Return updated permissions
+    const updatedPermissions = await prisma.sheetPermission.findMany({
+      where: { userSheetId: userSheet.id }
+    });
+
+    res.json({
+      error: false,
+      permissions: updatedPermissions,
+      message: 'Permissions updated successfully.'
+    });
+  } catch (error) {
+    console.error('Error updating sheet permissions:', error);
+    res.status(500).json({ error: true, message: 'Error updating sheet permissions.' });
+  }
+};
+
+export const removeUserFromSheet = async (req, res) => {
+  try {
+    const { id } = req.params; // sheetId
+    const { userId } = req.body;
+    const currentUserRole = req.user.role;
+
+    if (currentUserRole !== 'SuperAdmin') {
+      return res.status(403).json({ error: true, message: 'Only SuperAdmin can remove user access.' });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ error: true, message: 'userId is required.' });
+    }
+
+    // Find the userSheet
+    const userSheet = await prisma.userSheet.findUnique({
+      where: {
+        userId_sheetId: {
+          userId: Number(userId),
+          sheetId: Number(id)
+        }
+      }
+    });
+
+    if (!userSheet) {
+      return res.status(404).json({ error: true, message: 'User does not have access to this sheet.' });
+    }
+
+    // Remove permissions and userSheet in a transaction
+    await prisma.$transaction([
+      prisma.sheetPermission.deleteMany({
+        where: { userSheetId: userSheet.id }
+      }),
+      prisma.userSheet.delete({
+        where: { id: userSheet.id }
+      })
+    ]);
+
+    res.json({
+      error: false,
+      message: 'User access removed from sheet successfully.'
+    });
+  } catch (error) {
+    console.error('Error removing user from sheet:', error);
+    res.status(500).json({ error: true, message: 'Error removing user from sheet.' });
+  }
+};
 
 

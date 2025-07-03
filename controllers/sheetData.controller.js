@@ -1,14 +1,25 @@
 import { PrismaClient } from '@prisma/client';
+import { checkSheetPermission } from '../lib/ability.js';
+
 const prisma = new PrismaClient();
 
 // Create a new row in a sheet
 export const createSheetRow = async (req, res) => {
   try {
     const { spreadsheetId, position, row } = req.body;
-
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
     if (!spreadsheetId || !Array.isArray(row)) {
       return res.status(400).json({ error: 'spreadsheetId and row array are required.' });
+    }
+
+    // Check if user has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      const hasAccess = await checkSheetPermission(prisma, userId, parseInt(spreadsheetId), 'addRow');
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'You do not have permission to add rows to this sheet.' });
+      }
     }
 
     // Fetch the target sheet
@@ -78,13 +89,27 @@ export const createSheetRow = async (req, res) => {
 // Get all rows for a sheet
 export const getSheetRows = async (req, res) => {
   try {
-    const { sheetId } = req.params;
+    const { spreadsheetId } = req.params;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Check if user has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: parseInt(spreadsheetId)
+        }
+      });
+      
+      if (!userSheet) {
+        return res.status(403).json({ error: 'You do not have access to this sheet.' });
+      }
+    }
 
     const rows = await prisma.sheetData.findMany({
       where: {
-        sheet: {
-          id: parseInt(sheetId)
-        }
+        spreadsheetId: parseInt(spreadsheetId)
       },
       orderBy: { position: 'asc' }
     });
@@ -98,14 +123,21 @@ export const getSheetRows = async (req, res) => {
 // Update a row by position
 export const updateSheetRowByPosition = async (req, res) => {
   try {
-
-
-
     const { spreadsheetId, position } = req.params;
     const { row } = req.body;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
     if (!Array.isArray(row)) {
       return res.status(400).json({ error: 'Row data must be an array.' });
+    }
+
+    // Check if user has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      const hasAccess = await checkSheetPermission(prisma, userId, parseInt(spreadsheetId), 'updateRow');
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'You do not have permission to update rows in this sheet.' });
+      }
     }
 
     // First check if the row exists with given position
@@ -117,8 +149,6 @@ export const updateSheetRowByPosition = async (req, res) => {
     });
 
     console.log(existingRow, 'EXISTING::::');
-
-
 
     if (!existingRow) {
       return res.status(404).json({ error: 'Row not found at the specified position' });
@@ -133,9 +163,6 @@ export const updateSheetRowByPosition = async (req, res) => {
       return res.status(404).json({ error: 'Sheet not found' });
     }
 
-
-    console.log(sheet.columns.length, 'SHEET COLUMNS::::');
-    console.log(row.length, 'ROW LENGTH::::');
     // Validate row length matches column length
     if (sheet.columns.length !== row.length) {
       return res.status(400).json({
@@ -160,6 +187,16 @@ export const moveSheetRow = async (req, res) => {
   try {
     const { spreadsheetId } = req.params;
     const { sourceIndex, targetIndex } = req.body;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Check if user has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      const hasAccess = await checkSheetPermission(prisma, userId, parseInt(spreadsheetId), 'updateRow');
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'You do not have permission to move rows in this sheet.' });
+      }
+    }
 
     // Validate indices
     if (sourceIndex < 0 || targetIndex < 0) {
@@ -200,6 +237,7 @@ export const moveSheetRow = async (req, res) => {
         data: { position: -1 } // Temporary position
       });
 
+      // Shift rows between source and target
       if (sourceIndex < targetIndex) {
         // Moving down
         for (let i = sourceIndex + 1; i <= targetIndex; i++) {
@@ -244,57 +282,46 @@ export const moveSheetRow = async (req, res) => {
 export const deleteSheetRow = async (req, res) => {
   try {
     const { sheetId, position } = req.params;
-    const positionIndex = parseInt(position);
+    const userId = req.user.userId;
+    const userRole = req.user.role;
 
-    // Find the row first
-    const row = await prisma.sheetData.findFirst({
+    // Check if user has access to this sheet
+    if (userRole !== 'SuperAdmin') {
+      const hasAccess = await checkSheetPermission(prisma, userId, parseInt(sheetId), 'deleteRow');
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'You do not have permission to delete rows from this sheet.' });
+      }
+    }
+
+    // Find the row to delete
+    const rowToDelete = await prisma.sheetData.findFirst({
       where: {
-        sheet: {
-          id: parseInt(sheetId)
-        },
-        position: positionIndex
+        spreadsheetId: parseInt(sheetId),
+        position: parseInt(position)
       }
     });
 
-    if (!row) {
-      return res.status(404).json({ error: 'Row not found' });
+    if (!rowToDelete) {
+      return res.status(404).json({ error: 'Row not found at the specified position' });
     }
 
     // Delete the row
     await prisma.sheetData.delete({
-      where: {
-        id: row.id
-      }
+      where: { id: rowToDelete.id }
     });
 
-    // Get all remaining rows ordered by position
-    const remainingRows = await prisma.sheetData.findMany({
+    // Shift remaining rows up
+    await prisma.sheetData.updateMany({
       where: {
-        sheet: {
-          id: parseInt(sheetId)
-        }
+        spreadsheetId: parseInt(sheetId),
+        position: { gt: parseInt(position) }
       },
-      orderBy: {
-        position: 'asc'
+      data: {
+        position: { decrement: 1 }
       }
     });
 
-    // Update all positions starting from 0
-    for (let i = 0; i < remainingRows.length; i++) {
-      await prisma.sheetData.update({
-        where: {
-          id: remainingRows[i].id
-        },
-        data: {
-          position: i
-        }
-      });
-    }
-
-    res.status(204).send({
-      error: false,
-      message: 'Row deleted successfully'
-    });
+    res.json({ message: 'Row deleted successfully' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });

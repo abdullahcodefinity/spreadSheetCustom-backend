@@ -1,132 +1,206 @@
+import { PrismaClient } from '@prisma/client';
 
-import { prismaClient } from '../lib/prisma.js';
-import { defineAbilityFor, hasPermission } from '../lib/ability.js';
+const prisma = new PrismaClient();
 
-
+// Create a new value set
 export const createValueSet = async (req, res) => {
     try {
         const { name, values } = req.body;
-        const { permissions } = req.user;
+        const userRole = req.user.role;
 
-        const ability = defineAbilityFor({ permissions });
-
-        if (!ability.can('create', 'ValueSet')) {
+        // Only SuperAdmin can create value sets
+        if (userRole !== 'SuperAdmin') {
             return res.status(403).json({
                 error: true,
                 message: 'You do not have permission to create value sets'
             });
         }
 
-        const valueSet = await prismaClient.valueSet.create({
+        if (!name || !Array.isArray(values)) {
+            return res.status(400).json({
+                error: true,
+                message: 'Name and values array are required'
+            });
+        }
+
+        // Check if value set with same name already exists
+        const existingValueSet = await prisma.valueSet.findFirst({
+            where: { name }
+        });
+
+        if (existingValueSet) {
+            return res.status(400).json({
+                error: true,
+                message: 'A value set with this name already exists'
+            });
+        }
+
+        const valueSet = await prisma.valueSet.create({
             data: {
                 name,
                 values
             }
         });
 
-        res.json(valueSet);
+        res.status(201).json({
+            error: false,
+            data: valueSet,
+            message: 'Value set created successfully'
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error creating value set' });
+        console.error('Error creating value set:', error);
+        res.status(500).json({
+            error: true,
+            message: 'Error creating value set'
+        });
     }
 };
 
+// Get all value sets
 export const getValueSets = async (req, res) => {
     try {
-        const valueSets = await prismaClient.valueSet.findMany();
-        res.json(valueSets);
+        const valueSets = await prisma.valueSet.findMany({
+            include: {
+                columnDropdowns: {
+                    include: {
+                        sheet: {
+                            select: {
+                                id: true,
+                                name: true
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        res.json({
+            error: false,
+            data: valueSets
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error fetching value sets' });
+        console.error('Error fetching value sets:', error);
+        res.status(500).json({
+            error: true,
+            message: 'Error fetching value sets'
+        });
     }
 };
 
+// Get a single value set by ID
 export const getValueSet = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const valueSet = await prismaClient.valueSet.findUnique({
-            where: { id: Number(id) }
+        const valueSet = await prisma.valueSet.findUnique({
+            where: { id: parseInt(id) },
+            include: {
+                columnDropdowns: {
+                    include: {
+                        sheet: {
+                            select: {
+                                id: true,
+                                name: true
+                            }
+                        }
+                    }
+                }
+            }
         });
 
         if (!valueSet) {
-            return res.status(404).json({ error: 'Value set not found' });
-        }
-
-        res.json(valueSet);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error fetching value set' });
-    }
-};
-
-export const updateValueSet = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name, values } = req.body;
-        const { permissions } = req.user;
-
-        const ability = defineAbilityFor({ permissions });
-
-        if (!ability.can('update', 'ValueSet')) {
-            return res.status(403).json({
-                error: true,
-                message: 'You do not have permission to update value sets'
-            });
-        }
-
-        const valueSet = await prismaClient.valueSet.update({
-            where: { id: Number(id) },
-            data: {
-                name,
-                values
-            }
-        });
-
-        res.json({ data: valueSet, message: "Value set updated" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error updating value set' });
-    }
-};
-
-export const deleteValueSet = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { permissions } = req.user;
-
-        const ability = defineAbilityFor({ permissions });
-
-        if (!ability.can('delete', 'ValueSet')) {
-            return res.status(403).json({
-                error: true,
-                message: 'You do not have permission to delete value sets'
-            });
-        }
-
-        // Check if value set exists before deleting
-        const existingValueSet = await prismaClient.valueSet.findUnique({
-            where: { id: Number(id) },
-            include: {
-                columnDropdowns: true
-            }
-        });
-
-        if (!existingValueSet) {
             return res.status(404).json({
                 error: true,
                 message: 'Value set not found'
             });
         }
 
-        // First delete all related column dropdowns
-        await prismaClient.columnDropdown.deleteMany({
-            where: { valueSetId: Number(id) }
+        res.json({
+            error: false,
+            data: valueSet
+        });
+    } catch (error) {
+        console.error('Error fetching value set:', error);
+        res.status(500).json({
+            error: true,
+            message: 'Error fetching value set'
+        });
+    }
+};
+
+// Update a value set
+export const updateValueSet = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, values } = req.body;
+        const userRole = req.user.role;
+
+        // Only SuperAdmin can update value sets
+        if (userRole !== 'SuperAdmin') {
+            return res.status(403).json({
+                error: true,
+                message: 'You do not have permission to update value sets'
+            });
+        }
+
+        if (!name && !Array.isArray(values)) {
+            return res.status(400).json({
+                error: true,
+                message: 'At least name or values array is required'
+            });
+        }
+
+        const updateData = {};
+        if (name) updateData.name = name;
+        if (Array.isArray(values)) updateData.values = values;
+
+        const valueSet = await prisma.valueSet.update({
+            where: { id: parseInt(id) },
+            data: updateData
         });
 
-        // Then delete the value set
-        await prismaClient.valueSet.delete({
-            where: { id: Number(id) }
+        res.json({
+            error: false,
+            data: valueSet,
+            message: 'Value set updated successfully'
+        });
+    } catch (error) {
+        console.error('Error updating value set:', error);
+        res.status(500).json({
+            error: true,
+            message: 'Error updating value set'
+        });
+    }
+};
+
+// Delete a value set
+export const deleteValueSet = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userRole = req.user.role;
+
+        // Only SuperAdmin can delete value sets
+        if (userRole !== 'SuperAdmin') {
+            return res.status(403).json({
+                error: true,
+                message: 'You do not have permission to delete value sets'
+            });
+        }
+
+        // Check if value set is being used in any column dropdowns
+        const columnDropdowns = await prisma.columnDropdown.findMany({
+            where: { valueSetId: parseInt(id) }
+        });
+
+        if (columnDropdowns.length > 0) {
+            return res.status(400).json({
+                error: true,
+                message: 'Cannot delete value set as it is being used in column dropdowns'
+            });
+        }
+
+        await prisma.valueSet.delete({
+            where: { id: parseInt(id) }
         });
 
         res.json({
@@ -134,7 +208,10 @@ export const deleteValueSet = async (req, res) => {
             message: 'Value set deleted successfully'
         });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error deleting value set' });
+        console.error('Error deleting value set:', error);
+        res.status(500).json({
+            error: true,
+            message: 'Error deleting value set'
+        });
     }
 };

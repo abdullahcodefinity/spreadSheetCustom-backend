@@ -14,12 +14,7 @@ export const signup = async (req, res) => {
         name,
         email,
         password: hashed,
-        permissions: {
-          create: [
-            { permission: { connect: { action_subject: { action: 'read', subject: 'Sheet' } } } },
-            { permission: { connect: { action_subject: { action: 'create', subject: 'Sheet' } } } }
-          ]
-        }
+        role: 'User' // Default role for new users
       }
     });
 
@@ -34,14 +29,7 @@ export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await prisma.user.findUnique({
-      where: { email },
-      include: {
-        permissions: {
-          include: {
-            permission: true
-          }
-        }
-      }
+      where: { email }
     });
 
     if (!user) {
@@ -56,29 +44,18 @@ export const login = async (req, res) => {
     const token = jwt.sign(
       {
         userId: user.id,
-        role: user.role,
-        permissions: user.permissions.map(p => ({
-          action: p.permission.action,
-          subject: p.permission.subject
-        }))
+        role: user.role
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    // Remove password and format permissions
-    const { password: _, permissions, ...userWithoutPassword } = user;
-    const formattedPermissions = permissions.map(p => ({
-      action: p.permission.action,
-      subject: p.permission.subject
-    }));
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = user;
 
     res.json({ 
       token,
-      user: {
-        ...userWithoutPassword,
-        permissions: formattedPermissions
-      }
+      user: userWithoutPassword
     });
   } catch (error) {
     console.error(error);
@@ -88,16 +65,11 @@ export const login = async (req, res) => {
 
 export const createUserByAdmin = async (req, res) => {
   try {
-    const { name, email, password, permissions,role } = req.body;
+    const { name, email, password, role } = req.body;
 
     // Validate input
     if (!name || !email || !password) {
       return res.status(400).json({ error: true, message: 'Name, email, and password are required' });
-    }
-
-    // Validate permissions
-    if (!Array.isArray(permissions) || permissions.length === 0) {
-      return res.status(400).json({ error: true, message: 'At least one permission is required' });
     }
 
     // Check if user already exists
@@ -112,55 +84,14 @@ export const createUserByAdmin = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create permission operations
-    const permissionOperations = await Promise.all(
-      permissions.map(async (p) => {
-        const permission = await prisma.permission.upsert({
-          where: {
-            action_subject: {
-              action: p.action,
-              subject: p.subject
-            }
-          },
-          create: {
-            action: p.action,
-            subject: p.subject
-          },
-          update: {}
-        });
-        return permission;
-      })
-    );
-
-    // Create user with permissions in a transaction
-    const user = await prisma.$transaction(async (prisma) => {
-      // Create the user
-      const newUser = await prisma.user.create({
-        data: {
-          name,
-          email,
-          role,
-          password: hashedPassword,
-          permissions: {
-            create: permissionOperations.map(permission => ({
-              permission: {
-                connect: {
-                  id: permission.id
-                }
-              }
-            }))
-          }
-        },
-        include: {
-          permissions: {
-            include: {
-              permission: true
-            }
-          }
-        }
-      });
-
-      return newUser;
+    // Create user
+    const user = await prisma.user.create({
+      data: {
+        name,
+        email,
+        role: role || 'User',
+        password: hashedPassword
+      }
     });
 
     // Remove password from response
@@ -193,18 +124,31 @@ export const getAllUsers = async (req, res) => {
     const users = await prisma.user.findMany({
       where: whereClause,
       include: {
-        permissions: {
+        userSheets: {
           include: {
-            permission: true
+            sheet: {
+              select: {
+                id: true,
+                name: true
+              }
+            },
+            permissions: true
           }
         }
       }
     });
 
-    // Remove password from each user object
+    // Remove password from each user object and format response
     const usersWithoutPassword = users.map(user => {
       const { password, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      return {
+        ...userWithoutPassword,
+        sheets: user.userSheets.map(us => ({
+          sheetId: us.sheet.id,
+          sheetName: us.sheet.name,
+          permissions: us.permissions.map(p => p.type)
+        }))
+      };
     });
 
     res.json({
@@ -221,23 +165,16 @@ export const getAllUsers = async (req, res) => {
 export const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, permissions } = req.body;
+    const { name, email, role } = req.body;
 
     // Validate input
-    if (!name && !email && !permissions) {
+    if (!name && !email && !role) {
       return res.status(400).json({ error: true, message: 'At least one field to update is required' });
     }
 
     // Check if user exists
     const existingUser = await prisma.user.findUnique({
-      where: { id: parseInt(id) },
-      include: {
-        permissions: {
-          include: {
-            permission: true
-          }
-        }
-      }
+      where: { id: parseInt(id) }
     });
 
     if (!existingUser) {
@@ -255,80 +192,13 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    // Update user in a transaction
-    const updatedUser = await prisma.$transaction(async (prisma) => {
-      // If permissions are being updated, delete existing permissions
-      if (permissions) {
-        await prisma.userPermission.deleteMany({
-          where: { userId: parseInt(id) }
-        });
-
-        // First, create or find all permissions
-        const permissionOperations = await Promise.all(
-          permissions.map(async (p) => {
-            const permission = await prisma.permission.upsert({
-              where: {
-                action_subject: {
-                  action: p.action,
-                  subject: p.subject
-                }
-              },
-              create: {
-                action: p.action,
-                subject: p.subject
-              },
-              update: {}
-            });
-            return permission;
-          })
-        );
-
-        // Update user with the permissions
-        const user = await prisma.user.update({
-          where: { id: parseInt(id) },
-          data: {
-            ...(name && { name }),
-            ...(email && { email }),
-            permissions: {
-              create: permissionOperations.map(permission => ({
-                permission: {
-                  connect: {
-                    action_subject: {
-                      action: permission.action,
-                      subject: permission.subject
-                    }
-                  }
-                }
-              }))
-            }
-          },
-          include: {
-            permissions: {
-              include: {
-                permission: true
-              }
-            }
-          }
-        });
-
-        return user;
-      } else {
-        // If no permissions update, just update other fields
-        const user = await prisma.user.update({
-          where: { id: parseInt(id) },
-          data: {
-            ...(name && { name }),
-            ...(email && { email })
-          },
-          include: {
-            permissions: {
-              include: {
-                permission: true
-              }
-            }
-          }
-        });
-        return user;
+    // Update user
+    const updatedUser = await prisma.user.update({
+      where: { id: parseInt(id) },
+      data: {
+        ...(name && { name }),
+        ...(email && { email }),
+        ...(role && { role })
       }
     });
 
@@ -360,12 +230,7 @@ export const deleteUser = async (req, res) => {
       return res.status(404).json({ error: true, message: 'User not found' });
     }
 
-    // First delete all user permissions
-    await prisma.userPermission.deleteMany({
-      where: { userId: parseInt(id) }
-    });
-
-    // Then delete the user
+    // Delete user (Prisma will handle cascading deletes for related records)
     await prisma.user.delete({
       where: { id: parseInt(id) }
     });
@@ -385,14 +250,7 @@ export const getSingleUser = async (req, res) => {
     const { id } = req.params;
 
     const user = await prisma.user.findUnique({
-      where: { id: parseInt(id) },
-      include: {
-        permissions: {
-          include: {
-            permission: true
-          }
-        }
-      }
+      where: { id: parseInt(id) }
     });
 
     if (!user) {
