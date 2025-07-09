@@ -305,19 +305,30 @@ export const deleteSheetRow = async (req, res) => {
       return res.status(404).json({ error: 'Row not found at the specified position' });
     }
 
-    // Delete the row
-    await prisma.sheetData.delete({
-      where: { id: rowToDelete.id }
-    });
+    // Use transaction to handle deletion and position updates
+    await prisma.$transaction(async (tx) => {
+      // Delete the row first
+      await tx.sheetData.delete({
+        where: { id: rowToDelete.id }
+      });
 
-    // Shift remaining rows up
-    await prisma.sheetData.updateMany({
-      where: {
-        spreadsheetId: parseInt(sheetId),
-        position: { gt: parseInt(position) }
-      },
-      data: {
-        position: { decrement: 1 }
+      // Get all rows after the deleted position
+      const rowsToUpdate = await tx.sheetData.findMany({
+        where: {
+          spreadsheetId: parseInt(sheetId),
+          position: { gt: parseInt(position) }
+        },
+        orderBy: {
+          position: 'asc'
+        }
+      });
+
+      // Update positions one by one to avoid unique constraint conflicts
+      for (const row of rowsToUpdate) {
+        await tx.sheetData.update({
+          where: { id: row.id },
+          data: { position: row.position - 1 }
+        });
       }
     });
 
