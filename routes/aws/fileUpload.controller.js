@@ -31,21 +31,21 @@ export const uploadFileAndSaveUrl = async (req, res) => {
    });
   }
 
-  // Check if user has access to this sheet (reuse addRow permission for upload)
-  if (userRole !== "SuperAdmin") {
-   const { checkSheetPermission } = await import("../lib/ability.js");
-   const hasAccess = await checkSheetPermission(
-    prisma,
-    userId,
-    parseInt(spreadsheetId),
-    "addRow"
-   );
-   if (!hasAccess) {
-    return res.status(403).json({
-     error: "You do not have permission to upload files to this sheet.",
-    });
-   }
-  }
+  // // Check if user has access to this sheet (reuse addRow permission for upload)
+  // if (userRole !== "SuperAdmin") {
+  //  const { checkSheetPermission } = await import("../lib/ability.js");
+  //  const hasAccess = await checkSheetPermission(
+  //   prisma,
+  //   userId,
+  //   parseInt(spreadsheetId),
+  //   "addRow"
+  //  );
+  //  if (!hasAccess) {
+  //   return res.status(403).json({
+  //    error: "You do not have permission to upload files to this sheet.",
+  //   });
+  //  }
+  // }
 
   // Generate a unique file name
   const ext = path.extname(file.originalname);
