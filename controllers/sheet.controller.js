@@ -19,16 +19,30 @@ export const createSheet = async (req, res) => {
       return res.status(400).json({ error: 'Name and columns array are required' });
     }
 
+    // Validate userId
+    if (!userId || isNaN(Number(userId))) {
+      return res.status(400).json({ error: 'Invalid user ID' });
+    }
+
+    // Verify that the user exists in the database
+    const user = await prisma.user.findUnique({
+      where: { id: Number(userId) }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     // Create sheet, default row, and user-sheet relationship in a transaction
     const result = await prisma.$transaction(async (tx) => {
-              // Create the sheet
-        const sheet = await tx.sheet.create({
+      // Create the sheet
+      const sheet = await tx.sheet.create({
         data: {
           name,
           columns,
           userSheets: {
             create: {
-              userId: userId,
+              userId: Number(userId),
               role: 'OWNER' // or whatever role you want to assign to the creator
             }
           }
@@ -491,6 +505,90 @@ export const moveSheetColumn = async (req, res) => {
     res.json(updatedSheet);
   } catch (error) {
     console.error("Error moving sheet column:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const attachFileType = async (req, res) => {
+  try {
+    const { id: sheetId } = req.params;
+    const { columnName, fileType, action = 'attach' } = req.body; // action can be 'attach' or 'remove'
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Check if user is SuperAdmin or has update column permission
+    if (userRole !== 'SuperAdmin') {
+      // Check if user has access to this specific sheet
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(sheetId)
+        },
+        include: {
+          permissions: true
+        }
+      });
+
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
+
+      // Check if user has column update permission
+      const hasUpdatePermission = userSheet.permissions.some(p => p.type === 'updateColumn');
+
+      if (!hasUpdatePermission) {
+        return res.status(403).json({ message: "You do not have permission to update columns" });
+      }
+    }
+
+    // Get the current sheet
+    const sheet = await prisma.sheet.findUnique({
+      where: { id: Number(sheetId) },
+      select: {
+        columns: true,
+        columnsMeta: true
+      }
+    });
+
+    if (!sheet) {
+      return res.status(404).json({ message: "Sheet not found" });
+    }
+
+    // Get current columnsMeta or initialize if empty
+    let columnsMeta = sheet.columnsMeta || {};
+
+    if (action === 'attach') {
+      if (!fileType) {
+        return res.status(400).json({ message: "fileType is required for attach action" });
+      }
+      // Update the columnsMeta for the specified column
+      columnsMeta[columnName] = {
+        ...columnsMeta[columnName],
+        fileType: fileType
+      };
+    } else if (action === 'remove') {
+      // Remove the entire column metadata when removing file type
+      if (columnName in columnsMeta) {
+        delete columnsMeta[columnName];
+      }
+    }
+
+    // Update the sheet with new columnsMeta
+    const updatedSheet = await prisma.sheet.update({
+      where: { id: Number(sheetId) },
+      data: {
+        columnsMeta
+      }
+    });
+
+    res.json({
+      error: false,
+      data: updatedSheet,
+      message: action === 'attach' ? "File type attached successfully" : "File type removed successfully"
+    });
+
+  } catch (error) {
+    console.error("Error attaching file type:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };

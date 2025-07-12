@@ -20,5 +20,7 @@ router.put('/:id/columns/dropdown', controller.attachDropdown);
 router.put('/:id/columns/dropdown/remove', controller.removeDropdown);
 router.put('/remove-access/:id', controller.removeUserFromSheet);
 router.delete('/:id', controller.deleteSheet);
+router.put('/:id/columns/file-type', controller.attachFileType);
+
 
 export default router;
