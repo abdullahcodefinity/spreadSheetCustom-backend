@@ -55,91 +55,195 @@ export const getSheetGroups = async (req, res) => {
   try {
     const userRole = req.user.role;
     const userId = req.user.userId;
-    if (userRole === 'SuperAdmin') {
+    
+    // Try to determine the correct relation name based on schema options
+    let includeRelation = {};
+    try {
+      // First attempt with lowercase 'sheets'
+      includeRelation = { sheets: true };
+      
+      if (userRole === 'SuperAdmin') {
+        const sheetGroups = await prisma.sheetGroup.findMany({
+          include: includeRelation,
+        });
+        return res.json(sheetGroups);
+      }
+      
+      // For regular users, find groups that have at least one sheet the user has access to
       const sheetGroups = await prisma.sheetGroup.findMany({
-        include: { sheets: true },
+        where: {
+          sheets: {
+            some: {
+              userSheets: {
+                some: {
+                  userId: userId
+                }
+              }
+            }
+          }
+        },
+        include: {
+          sheets: {
+            where: {
+              userSheets: {
+                some: {
+                  userId: userId
+                }
+              }
+            }
+          }
+        }
       });
       return res.json(sheetGroups);
-    }
-    // For regular users, find groups that have at least one sheet the user has access to
-    const sheetGroups = await prisma.sheetGroup.findMany({
-      where: {
-        sheets: {
-          some: {
-            userSheets: {
-              some: {
-                userId: userId
-              }
-            }
-          }
+    } catch (relationError) {
+      // If the first attempt fails, try with capitalized 'Sheet'
+      if (relationError.message.includes("Unknown field `sheets`")) {
+        includeRelation = { Sheet: true };
+        
+        if (userRole === 'SuperAdmin') {
+          const sheetGroups = await prisma.sheetGroup.findMany({
+            include: includeRelation,
+          });
+          return res.json(sheetGroups);
         }
-      },
-      include: {
-        sheets: {
+        
+        // For regular users with capitalized relation
+        const sheetGroups = await prisma.sheetGroup.findMany({
           where: {
-            userSheets: {
+            Sheet: {
               some: {
-                userId: userId
+                userSheets: {
+                  some: {
+                    userId: userId
+                  }
+                }
+              }
+            }
+          },
+          include: {
+            Sheet: {
+              where: {
+                userSheets: {
+                  some: {
+                    userId: userId
+                  }
+                }
               }
             }
           }
-        }
+        });
+        return res.json(sheetGroups);
       }
-    });
-    res.json(sheetGroups);
+      
+      // If it's a different error, throw it to be caught by the outer catch
+      throw relationError;
+    }
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Error fetching sheet groups' });
+    res.status(500).json({ error: 'Error fetching sheet groups', details: error.message });
   }
 };
 
+// Get a single SheetGroup by ID
 // Get a single SheetGroup by ID
 export const getSheetGroup = async (req, res) => {
   try {
     const { id } = req.params;
     const userRole = req.user.role;
     const userId = req.user.userId;
-    if (userRole === 'SuperAdmin') {
+    
+    // Try to determine the correct relation name based on schema options
+    try {
+      // First attempt with lowercase 'sheets'
+      if (userRole === 'SuperAdmin') {
+        const sheetGroup = await prisma.sheetGroup.findUnique({
+          where: { id: Number(id) },
+          include: { sheets: true },
+        });
+        if (!sheetGroup) {
+          return res.status(404).json({ error: 'Sheet group not found' });
+        }
+        return res.json(sheetGroup);
+      }
+      
+      // For regular users, only return the group if it contains sheets the user can access
       const sheetGroup = await prisma.sheetGroup.findUnique({
         where: { id: Number(id) },
-        include: { sheets: true },
-      });
-      if (!sheetGroup) {
-        return res.status(404).json({ error: 'Sheet group not found' });
-      }
-      return res.json(sheetGroup);
-    }
-    // For regular users, only return the group if it contains sheets the user can access
-    const sheetGroup = await prisma.sheetGroup.findUnique({
-      where: { id: Number(id) },
-      include: {
-        sheets: {
-          where: {
-            userSheets: {
-              some: {
-                userId: userId
+        include: {
+          sheets: {
+            where: {
+              userSheets: {
+                some: {
+                  userId: userId
+                }
               }
-            }
-          },
-          include: {
-            sheetData: true,
-            userSheets: {
-              include: {
-                user: true,
-                permissions: true
+            },
+            include: {
+              sheetData: true,
+              userSheets: {
+                include: {
+                  user: true,
+                  permissions: true
+                }
               }
             }
           }
         }
+      });
+      if (!sheetGroup || !sheetGroup.sheets || sheetGroup.sheets.length === 0) {
+        return res.status(404).json({ error: 'Sheet group not found or you do not have access' });
       }
-    });
-    if (!sheetGroup || !sheetGroup.sheets || sheetGroup.sheets.length === 0) {
-      return res.status(404).json({ error: 'Sheet group not found or you do not have access' });
+      return res.json(sheetGroup);
+    } catch (relationError) {
+      // If the first attempt fails, try with capitalized 'Sheet'
+      if (relationError.message.includes("Unknown field `sheets`")) {
+        if (userRole === 'SuperAdmin') {
+          const sheetGroup = await prisma.sheetGroup.findUnique({
+            where: { id: Number(id) },
+            include: { Sheet: true },
+          });
+          if (!sheetGroup) {
+            return res.status(404).json({ error: 'Sheet group not found' });
+          }
+          return res.json(sheetGroup);
+        }
+        
+        // For regular users with capitalized relation
+        const sheetGroup = await prisma.sheetGroup.findUnique({
+          where: { id: Number(id) },
+          include: {
+            Sheet: {
+              where: {
+                userSheets: {
+                  some: {
+                    userId: userId
+                  }
+                }
+              },
+              include: {
+                sheetData: true,
+                userSheets: {
+                  include: {
+                    user: true,
+                    permissions: true
+                  }
+                }
+              }
+            }
+          }
+        });
+        if (!sheetGroup || !sheetGroup.Sheet || sheetGroup.Sheet.length === 0) {
+          return res.status(404).json({ error: 'Sheet group not found or you do not have access' });
+        }
+        return res.json(sheetGroup);
+      }
+      
+      // If it's a different error, throw it to be caught by the outer catch
+      throw relationError;
     }
-    res.json(sheetGroup);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Error fetching sheet group' });
+    res.status(500).json({ error: 'Error fetching sheet group', details: error.message });
   }
 };
 
