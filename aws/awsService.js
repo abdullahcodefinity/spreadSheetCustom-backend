@@ -6,6 +6,7 @@ import {
     DeleteObjectCommand,
   } from '@aws-sdk/client-s3';
   import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+  import mime from 'mime-types';
   
   // Uncomment to enable private CloudFront URL signing:
   // import { Signer } from '@aws-sdk/cloudfront-signer';
@@ -42,10 +43,14 @@ import {
         body = fs.createReadStream(fileSource);
       }
   
+        // Dynamically detect MIME type
+    const contentType = mime.lookup(fileName) || 'application/octet-stream';
       await s3Client.send(new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET_NAME,
         Key: fileName,
         Body: body,
+         ContentType: contentType,
+      ContentDisposition: 'inline',
       }));
   
       // Cleanup local file if fileSource is a path

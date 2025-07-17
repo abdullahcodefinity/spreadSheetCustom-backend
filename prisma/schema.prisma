@@ -33,11 +33,22 @@ model Sheet {
   name            String
   columns         String[]
   columnsMeta     Json?
+  sheetGroupId    Int?              // ✅ FK (optional)
+  sheetGroup      SheetGroup?       @relation(fields: [sheetGroupId], references: [id])
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @default(now())
   userSheets      UserSheet[]
   sheetData       SheetData[]
   columnDropdowns ColumnDropdown[]
+}
+
+model SheetGroup {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  sheets      Sheet[]   // ✅ One group has many sheets
 }
 
 model UserSheet {

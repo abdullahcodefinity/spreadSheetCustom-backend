@@ -2,7 +2,7 @@ import multer from "multer";
 import path from "path";
 import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
-import * as awsService from "../aws/awsService.js";
+import * as awsService from "./awsService.js";
 
 // Set up multer storage (memory storage for direct S3 upload)
 const storage = multer.memoryStorage();
@@ -56,7 +56,7 @@ export const uploadFileAndSaveUrl = async (req, res) => {
   if (uploadResult === "error") {
    return res.status(500).json({ error: "Failed to upload file to S3." });
   }
-console.log(uploadResult,'UPLOADRESULT>>>>>')
+
   // Get the file URL (CloudFront or S3)
 //   const fileUrl = awsService.getCloudFrontDownloadUrl(fileName);
 // console.log(fileUrl,'LLKKJJHH::::><')
@@ -89,4 +89,47 @@ console.log('kkkkk')
   console.error(error);
   res.status(500).json({ error: error.message });
  }
+};
+
+export const removeFileFromCell = async (req, res) => {
+  try {
+    const { spreadsheetId } = req.params;
+    const { position, columnIndex } = req.body;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Find the row
+    const rowRecord = await prisma.sheetData.findFirst({
+      where: {
+        spreadsheetId: parseInt(spreadsheetId),
+        position: parseInt(position),
+      },
+    });
+    if (!rowRecord) {
+      return res.status(404).json({ error: "Row not found at the specified position." });
+    }
+
+    // Get the row data
+    let rowData = rowRecord.row;
+    if (!Array.isArray(rowData)) rowData = [];
+    const cellValue = rowData[columnIndex];
+
+    // Only proceed if there is a file reference to remove
+    if (!cellValue || !cellValue.fileUrl) {
+      return res.status(400).json({ error: "No file found in the specified cell." });
+    }
+
+    // Update the cell to be empty
+    rowData[columnIndex] = "";
+
+    const updatedRow = await prisma.sheetData.update({
+      where: { id: rowRecord.id },
+      data: { row: rowData },
+    });
+
+    res.status(200).json({ message: "File  removed successfully.", updatedRow });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
 };

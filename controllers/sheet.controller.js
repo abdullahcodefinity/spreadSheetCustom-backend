@@ -102,7 +102,9 @@ export const getSheets = async (req, res) => {
     // If user is super admin, return all sheets
     if (userRole === 'SuperAdmin') {
       const sheets = await prisma.sheet.findMany({
-        where: searchCondition,
+        where: {
+          ...searchCondition
+        },
         include: {
           sheetData: true,
           userSheets: {
@@ -114,7 +116,7 @@ export const getSheets = async (req, res) => {
                   email: true
                 }
               },
-              permissions: true // Remove nested include of type
+              permissions: true
             }
           }
         }
@@ -138,7 +140,7 @@ export const getSheets = async (req, res) => {
           where: { userId: userId },
           select: {
             role: true,
-            permissions: true, // Remove nested include of type
+            permissions: true,
             user: {
               select: {
                 id: true,
@@ -155,6 +157,72 @@ export const getSheets = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error fetching sheets' });
+  }
+};
+
+export const getSheetsWithoutGroup = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Sheets not linked to any group (sheetGroupId is null)
+    const baseWhere = { sheetGroupId: null };
+
+    if (userRole === 'SuperAdmin') {
+      const sheets = await prisma.sheet.findMany({
+        where: baseWhere,
+        include: {
+          sheetData: true,
+          userSheets: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true
+                }
+              },
+              permissions: true
+            }
+          }
+        }
+      });
+      return res.json(sheets);
+    }
+
+    // For regular users, only sheets they have access to
+    const sheets = await prisma.sheet.findMany({
+      where: {
+        ...baseWhere,
+        userSheets: {
+          some: {
+            userId: userId
+          }
+        }
+      },
+      include: {
+        sheetData: true,
+        userSheets: {
+          where: { userId: userId },
+          select: {
+            role: true,
+            permissions: true,
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    res.json(sheets);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Error fetching sheets without group' });
   }
 };
 
@@ -589,6 +657,77 @@ export const attachFileType = async (req, res) => {
 
   } catch (error) {
     console.error("Error attaching file type:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const attachCalendar = async (req, res) => {
+  try {
+    const { id: sheetId } = req.params;
+    const { columnName, action = 'attach' } = req.body; // action can be 'attach' or 'remove'
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Check if user is SuperAdmin or has update column permission
+    if (userRole !== 'SuperAdmin') {
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(sheetId)
+        },
+        include: {
+          permissions: true
+        }
+      });
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
+      const hasUpdatePermission = userSheet.permissions.some(p => p.type === 'updateColumn');
+      if (!hasUpdatePermission) {
+        return res.status(403).json({ message: "You do not have permission to update columns" });
+      }
+    }
+
+    // Get the current sheet
+    const sheet = await prisma.sheet.findUnique({
+      where: { id: Number(sheetId) },
+      select: {
+        columns: true,
+        columnsMeta: true
+      }
+    });
+    if (!sheet) {
+      return res.status(404).json({ message: "Sheet not found" });
+    }
+    let columnsMeta = sheet.columnsMeta || {};
+    if (action === 'attach') {
+      // Attach calendar to the column
+      columnsMeta[columnName] = {
+        ...columnsMeta[columnName],
+        calendar: true
+      };
+    } else if (action === 'remove') {
+      // Remove calendar from the column
+      if (columnsMeta[columnName]) {
+        delete columnsMeta[columnName].calendar;
+        // If the column meta is now empty, remove the column meta entirely
+        if (Object.keys(columnsMeta[columnName]).length === 0) {
+          delete columnsMeta[columnName];
+        }
+      }
+    }
+    // Update the sheet with new columnsMeta
+    const updatedSheet = await prisma.sheet.update({
+      where: { id: Number(sheetId) },
+      data: { columnsMeta }
+    });
+    res.json({
+      error: false,
+      data: updatedSheet,
+      message: action === 'attach' ? "Calendar attached successfully" : "Calendar removed successfully"
+    });
+  } catch (error) {
+    console.error("Error attaching calendar:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
