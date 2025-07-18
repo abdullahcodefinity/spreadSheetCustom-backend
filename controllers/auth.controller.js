@@ -129,10 +129,12 @@ export const getAllUsers = async (req, res) => {
             sheet: {
               select: {
                 id: true,
-                name: true
+                name: true,
+                columns: true
               }
             },
-            permissions: true
+            permissions: true,
+            columnLocks: true // Include column permissions
           }
         }
       }
@@ -146,7 +148,8 @@ export const getAllUsers = async (req, res) => {
         sheets: user.userSheets.map(us => ({
           sheetId: us.sheet.id,
           sheetName: us.sheet.name,
-          permissions: us.permissions.map(p => p.type)
+          permissions: us.permissions.map(p => p.type),
+          frozenColumns: us.columnLocks.map(cl => cl.columnName) // Add frozen columns
         }))
       };
     });
@@ -220,6 +223,14 @@ export const updateUser = async (req, res) => {
 export const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
+    const currentUserRole = req.user.role;
+
+    if (currentUserRole !== 'SuperAdmin') {
+      return res.status(403).json({ 
+        error: true, 
+        message: 'Only SuperAdmin can delete users' 
+      });
+    }
 
     // Check if user exists
     const existingUser = await prisma.user.findUnique({
@@ -227,13 +238,42 @@ export const deleteUser = async (req, res) => {
     });
 
     if (!existingUser) {
-      return res.status(404).json({ error: true, message: 'User not found' });
+      return res.status(404).json({ 
+        error: true, 
+        message: 'User not found' 
+      });
     }
 
-    // Delete user (Prisma will handle cascading deletes for related records)
-    await prisma.user.delete({
-      where: { id: parseInt(id) }
-    });
+    // Delete user and all related records in a transaction
+    await prisma.$transaction([
+      // Delete column permissions for this user
+      prisma.columnPermission.deleteMany({
+        where: {
+          userSheet: {
+            userId: parseInt(id)
+          }
+        }
+      }),
+      
+      // Delete sheet permissions for this user
+      prisma.sheetPermission.deleteMany({
+        where: {
+          userSheet: {
+            userId: parseInt(id)
+          }
+        }
+      }),
+      
+      // Delete userSheet relationships
+      prisma.userSheet.deleteMany({
+        where: { userId: parseInt(id) }
+      }),
+      
+      // Finally delete the user
+      prisma.user.delete({
+        where: { id: parseInt(id) }
+      })
+    ]);
 
     res.json({
       message: 'User deleted successfully', 
@@ -241,10 +281,12 @@ export const deleteUser = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: true, message: 'Error deleting user' });
+    res.status(500).json({ 
+      error: true, 
+      message: 'Error deleting user' 
+    });
   }
 };
-
 export const getSingleUser = async (req, res) => {
   try {
     const { id } = req.params;

@@ -25,7 +25,6 @@ model User {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @default(now())
   userSheets   UserSheet[]
-  // Removed: permissions  UserPermission[]
 }
 
 model Sheet {
@@ -33,7 +32,7 @@ model Sheet {
   name            String
   columns         String[]
   columnsMeta     Json?
-  sheetGroupId    Int?              // ✅ FK (optional)
+  sheetGroupId    Int?              
   sheetGroup      SheetGroup?       @relation(fields: [sheetGroupId], references: [id])
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @default(now())
@@ -48,17 +47,18 @@ model SheetGroup {
   description String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @default(now())
-  sheets      Sheet[]   // ✅ One group has many sheets
+  sheets      Sheet[]
 }
 
 model UserSheet {
-  id         Int               @id @default(autoincrement())
-  userId     Int
-  sheetId    Int
-  role       String
-  sheet      Sheet             @relation(fields: [sheetId], references: [id])
-  user       User              @relation(fields: [userId], references: [id])
-  permissions SheetPermission[] // ✅ Normalized permissions per sheet
+  id           Int                @id @default(autoincrement())
+  userId       Int
+  sheetId      Int
+  role         String
+  sheet        Sheet              @relation(fields: [sheetId], references: [id])
+  user         User               @relation(fields: [userId], references: [id])
+  permissions  SheetPermission[]
+  columnLocks  ColumnPermission[]  // 👈 NEW: Relation to column-level permissions
 
   @@unique([userId, sheetId])
 }
@@ -69,16 +69,26 @@ model SheetPermission {
   userSheetId  Int
   type         SheetPermissionType
 
-  @@unique([userSheetId, type]) // One type per user per sheet
+  @@unique([userSheetId, type])
+}
+
+model ColumnPermission {
+  id           Int        @id @default(autoincrement())
+  userSheet    UserSheet  @relation(fields: [userSheetId], references: [id])
+  userSheetId  Int
+  columnName   String
+  canEdit      Boolean     // true = editable, false = frozen
+
+  @@unique([userSheetId, columnName])
 }
 
 model SheetData {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   spreadsheetId Int
   position      Int
   row           Json
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now())
 
   sheet         Sheet     @relation(fields: [spreadsheetId], references: [id])
 

@@ -116,7 +116,8 @@ export const getSheets = async (req, res) => {
                   email: true
                 }
               },
-              permissions: true
+              permissions: true,
+              columnLocks: true // Include column permissions
             }
           }
         }
@@ -141,6 +142,7 @@ export const getSheets = async (req, res) => {
           select: {
             role: true,
             permissions: true,
+            columnLocks: true, // Include column permissions
             user: {
               select: {
                 id: true,
@@ -153,7 +155,19 @@ export const getSheets = async (req, res) => {
       }
     });
 
-    res.json(sheets);
+    // Add frozenColumns property to each sheet
+    const sheetsWithFrozenColumns = sheets.map(sheet => {
+      const frozenColumns = sheet.userSheets.length > 0
+        ? sheet.userSheets[0].columnLocks.map(cl => cl.columnName)
+        : [];
+      
+      return {
+        ...sheet,
+        frozenColumns
+      };
+    });
+
+    res.json(sheetsWithFrozenColumns);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error fetching sheets' });
@@ -182,7 +196,8 @@ export const getSheetsWithoutGroup = async (req, res) => {
                   email: true
                 }
               },
-              permissions: true
+              permissions: true,
+              columnLocks: true // Include column permissions
             }
           }
         }
@@ -207,6 +222,7 @@ export const getSheetsWithoutGroup = async (req, res) => {
           select: {
             role: true,
             permissions: true,
+            columnLocks: true, // Include column permissions
             user: {
               select: {
                 id: true,
@@ -219,7 +235,19 @@ export const getSheetsWithoutGroup = async (req, res) => {
       }
     });
 
-    res.json(sheets);
+    // Add frozenColumns property to each sheet
+    const sheetsWithFrozenColumns = sheets.map(sheet => {
+      const frozenColumns = sheet.userSheets.length > 0
+        ? sheet.userSheets[0].columnLocks.map(cl => cl.columnName)
+        : [];
+      
+      return {
+        ...sheet,
+        frozenColumns
+      };
+    });
+
+    res.json(sheetsWithFrozenColumns);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error fetching sheets without group' });
@@ -263,6 +291,7 @@ export const getSheet = async (req, res) => {
           select: {
             role: true,
             permissions: true,
+            columnLocks: true, // Include column permissions
             user: {
               select: {
                 id: true,
@@ -279,13 +308,23 @@ export const getSheet = async (req, res) => {
       return res.status(404).json({ error: 'Sheet not found' });
     }
 
-    res.json(sheet);
+    // Add frozenColumns property
+    const frozenColumns = sheet.userSheets.length > 0
+      ? sheet.userSheets[0].columnLocks.map(cl => cl.columnName)
+      : [];
+
+    // Add the frozenColumns property to the response
+    const responseSheet = {
+      ...sheet,
+      frozenColumns
+    };
+
+    res.json(responseSheet);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error fetching sheet' });
   }
 };
-
 export const updateSheet = async (req, res) => {
   try {
     const { id } = req.params;
@@ -436,6 +475,18 @@ export const updateSheetColumns = async (req, res) => {
       });
     }
 
+    // Store old column name if we're updating a column
+    let oldColumnName = null;
+    if (typeof updateAtIndex === "number" && newColumnName) {
+      oldColumnName = updatedColumns[updateAtIndex];
+    }
+
+    // Store deleted column name if we're deleting a column
+    let deletedColumnName = null;
+    if (typeof deleteAtIndex === "number") {
+      deletedColumnName = updatedColumns[deleteAtIndex];
+    }
+
     // Insert logic
     if (typeof insertAtIndex === "number" && newColumnName) {
       updatedColumns.splice(insertAtIndex, 0, newColumnName);
@@ -478,6 +529,33 @@ export const updateSheetColumns = async (req, res) => {
             data: { row: updatedRow }
           });
         }
+      }
+
+      // If a column was renamed, update any column permissions that reference it
+      if (oldColumnName && typeof updateAtIndex === "number" && newColumnName) {
+        await tx.columnPermission.updateMany({
+          where: {
+            userSheet: {
+              sheetId: Number(id)
+            },
+            columnName: oldColumnName
+          },
+          data: {
+            columnName: newColumnName
+          }
+        });
+      }
+
+      // If a column was deleted, remove any column permissions for it
+      if (deletedColumnName) {
+        await tx.columnPermission.deleteMany({
+          where: {
+            userSheet: {
+              sheetId: Number(id)
+            },
+            columnName: deletedColumnName
+          }
+        });
       }
 
       return updated;
@@ -884,9 +962,18 @@ export const deleteSheet = async (req, res) => {
       });
     }
 
-    // First delete related records in order to handle foreign key constraints
+    // Delete all related records in a transaction to maintain referential integrity
     await prisma.$transaction([
-      // First delete permissions since they reference userSheets
+      // Delete column permissions that reference userSheets for this sheet
+      prisma.columnPermission.deleteMany({
+        where: {
+          userSheet: {
+            sheetId: Number(id)
+          }
+        }
+      }),
+      
+      // Delete sheet permissions that reference userSheets for this sheet
       prisma.sheetPermission.deleteMany({
         where: {
           userSheet: {
@@ -894,18 +981,23 @@ export const deleteSheet = async (req, res) => {
           }
         }
       }),
-      // Then delete userSheets
+      
+      // Delete userSheets relationships
       prisma.userSheet.deleteMany({
         where: { sheetId: Number(id) }
       }),
-      // Delete other related records
+      
+      // Delete sheet data (rows)
       prisma.sheetData.deleteMany({
         where: { spreadsheetId: Number(id) }
       }),
+      
+      // Delete column dropdowns
       prisma.columnDropdown.deleteMany({
         where: { sheetId: Number(id) }
       }),
-      // Finally delete the sheet
+      
+      // Finally delete the sheet itself
       prisma.sheet.delete({
         where: { id: Number(id) }
       })
@@ -924,10 +1016,11 @@ export const deleteSheet = async (req, res) => {
   }
 };
 
+
 export const shareSheet = async (req, res) => {
   try {
     const { id } = req.params;
-    const { users, permissions } = req.body;
+    const { users, permissions, frozenColumns } = req.body;
     const currentUserRole = req.user.role;
 
     if (currentUserRole !== 'SuperAdmin') {
@@ -958,6 +1051,15 @@ export const shareSheet = async (req, res) => {
         });
       }
     }
+
+    // Get sheet to validate column names if frozen columns are provided
+    const sheet = frozenColumns ? await prisma.sheet.findUnique({
+      where: { id: Number(id) },
+      select: { columns: true }
+    }) : null;
+
+    // Track skipped columns for each user
+    const skippedColumnsByUser = {};
 
     await prisma.$transaction(async (tx) => {
       for (const user of users) {
@@ -1008,43 +1110,90 @@ export const shareSheet = async (req, res) => {
             });
           }
         }
-      }
-    });
 
-    // Return updated user access list with permissions
-    const userSheets = await prisma.userSheet.findMany({
-      where: { sheetId: Number(id) },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true
+        // If frozen columns are provided for this user, update them
+        if (frozenColumns && frozenColumns[user.userId] && sheet) {
+          const userFrozenColumns = frozenColumns[user.userId];
+          skippedColumnsByUser[user.userId] = [];
+          
+          // Filter to valid columns
+          const validUserFrozenColumns = userFrozenColumns.filter(columnName => {
+            const isValid = sheet.columns.includes(columnName);
+            if (!isValid) {
+              skippedColumnsByUser[user.userId].push(columnName);
+            }
+            return isValid;
+          });
+          
+          // Delete existing column permissions for this userSheet
+          await tx.columnPermission.deleteMany({
+            where: { userSheetId: userSheet.id }
+          });
+
+          // Create new column permissions for valid frozen columns
+          for (const columnName of validUserFrozenColumns) {
+            await tx.columnPermission.create({
+              data: {
+                userSheetId: userSheet.id,
+                columnName: columnName,
+                canEdit: false // Set to false for frozen columns
+              }
+            });
           }
-        },
-        permissions: true
+        }
       }
     });
 
-    res.json({ 
-      error: false, 
-      userSheets, 
-      message: 'Sheet access and permissions updated successfully.' 
-    });
+        // Return updated user access list with permissions
+        const userSheets = await prisma.userSheet.findMany({
+          where: { sheetId: Number(id) },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true
+              }
+            },
+            permissions: true,
+            columnLocks: true // Include column permissions
+          }
+        });
+    
+        // Clean up skippedColumnsByUser to only include users with skipped columns
+        Object.keys(skippedColumnsByUser).forEach(userId => {
+          if (skippedColumnsByUser[userId].length === 0) {
+            delete skippedColumnsByUser[userId];
+          }
+        });
+    
+        const hasSkippedColumns = Object.keys(skippedColumnsByUser).length > 0;
+    
+        res.json({ 
+          error: false, 
+          userSheets,
+          skippedColumnsByUser: hasSkippedColumns ? skippedColumnsByUser : undefined,
+          message: hasSkippedColumns
+            ? 'Sheet access and permissions updated successfully, but some column names were invalid and skipped.'
+            : 'Sheet access and permissions updated successfully.'
+        });
+    
+      } catch (error) {
+        console.error('Error managing sheet access:', error);
+        res.status(500).json({ 
+          error: true, 
+          message: 'Error managing sheet access and permissions.' 
+        });
+      }
+    };
 
-  } catch (error) {
-    console.error('Error managing sheet access:', error);
-    res.status(500).json({ 
-      error: true, 
-      message: 'Error managing sheet access and permissions.' 
-    });
-  }
-};
+
+
 
 export const updateSheetPermissions = async (req, res) => {
   try {
     const { id } = req.params; // sheetId
-    const { userId, permissions } = req.body;
+    const { userId, permissions, frozenColumns } = req.body;
     const currentUserRole = req.user.role;
 
     if (currentUserRole !== 'SuperAdmin') {
@@ -1052,24 +1201,31 @@ export const updateSheetPermissions = async (req, res) => {
     }
 
     // Validate input
-    if (!userId || !Array.isArray(permissions)) {
-      return res.status(400).json({ error: true, message: 'userId and permissions array are required.' });
+    if (!userId) {
+      return res.status(400).json({ error: true, message: 'userId is required.' });
     }
 
-    const validPermissions = [
-      'addColumn',
-      'deleteColumn',
-      'updateColumn', 
-      'addRow',
-      'deleteRow',
-      'updateRow'
-    ];
-    const invalidPermissions = permissions.filter(p => !validPermissions.includes(p));
-    if (invalidPermissions.length > 0) {
-      return res.status(400).json({
-        error: true,
-        message: `Invalid permissions: ${invalidPermissions.join(', ')}`
-      });
+    // Validate permissions if provided
+    if (permissions && !Array.isArray(permissions)) {
+      return res.status(400).json({ error: true, message: 'permissions must be an array.' });
+    }
+
+    if (permissions && permissions.length > 0) {
+      const validPermissions = [
+        'addColumn',
+        'deleteColumn',
+        'updateColumn', 
+        'addRow',
+        'deleteRow',
+        'updateRow'
+      ];
+      const invalidPermissions = permissions.filter(p => !validPermissions.includes(p));
+      if (invalidPermissions.length > 0) {
+        return res.status(400).json({
+          error: true,
+          message: `Invalid permissions: ${invalidPermissions.join(', ')}`
+        });
+      }
     }
 
     // Find the userSheet
@@ -1086,34 +1242,92 @@ export const updateSheetPermissions = async (req, res) => {
       return res.status(404).json({ error: true, message: 'User does not have access to this sheet.' });
     }
 
-    // Update permissions in a transaction
-    await prisma.$transaction([
-      prisma.sheetPermission.deleteMany({
-        where: { userSheetId: userSheet.id }
-      }),
-      ...permissions.map(type =>
-        prisma.sheetPermission.create({
-          data: {
-            userSheetId: userSheet.id,
-            type
-          }
-        })
-      )
-    ]);
+    // Get sheet to validate column names if frozen columns are provided
+    let sheet = null;
+    let validFrozenColumns = [];
+    let skippedColumns = [];
+    
+    if (frozenColumns && Array.isArray(frozenColumns) && frozenColumns.length > 0) {
+      sheet = await prisma.sheet.findUnique({
+        where: { id: Number(id) },
+        select: { columns: true }
+      });
+      
+      if (!sheet) {
+        return res.status(404).json({ error: true, message: 'Sheet not found.' });
+      }
 
-    // Return updated permissions
+      // Filter frozenColumns to only include columns that exist in the sheet
+      frozenColumns.forEach(columnName => {
+        if (sheet.columns.includes(columnName)) {
+          validFrozenColumns.push(columnName);
+        } else {
+          skippedColumns.push(columnName);
+        }
+      });
+    }
+
+    // Update permissions in a transaction
+    await prisma.$transaction(async (tx) => {
+      // Update sheet permissions if provided
+      if (permissions && permissions.length > 0) {
+        // Delete existing permissions
+        await tx.sheetPermission.deleteMany({
+          where: { userSheetId: userSheet.id }
+        });
+
+        // Create new permissions
+        for (const permissionType of permissions) {
+          await tx.sheetPermission.create({
+            data: {
+              userSheetId: userSheet.id,
+              type: permissionType
+            }
+          });
+        }
+      }
+
+      // Update column permissions if provided
+      if (frozenColumns && Array.isArray(frozenColumns)) {
+        // Delete existing column permissions
+        await tx.columnPermission.deleteMany({
+          where: { userSheetId: userSheet.id }
+        });
+
+        // Create new column permissions for valid frozen columns
+        for (const columnName of validFrozenColumns) {
+          await tx.columnPermission.create({
+            data: {
+              userSheetId: userSheet.id,
+              columnName: columnName,
+              canEdit: false // Frozen columns are not editable
+            }
+          });
+        }
+      }
+    });
+
+    // Get updated permissions to return
     const updatedPermissions = await prisma.sheetPermission.findMany({
+      where: { userSheetId: userSheet.id }
+    });
+
+    const frozenColumnPermissions = await prisma.columnPermission.findMany({
       where: { userSheetId: userSheet.id }
     });
 
     res.json({
       error: false,
       permissions: updatedPermissions,
-      message: 'Permissions updated successfully.'
+      frozenColumns: frozenColumnPermissions.map(cp => cp.columnName),
+      skippedColumns: skippedColumns.length > 0 ? skippedColumns : undefined,
+      message: skippedColumns.length > 0 
+        ? 'Permissions updated successfully. Some column names were invalid and skipped.'
+        : 'Permissions updated successfully.'
     });
   } catch (error) {
-    console.error('Error updating sheet permissions:', error);
-    res.status(500).json({ error: true, message: 'Error updating sheet permissions.' });
+    console.error('Error updating permissions:', error);
+    res.status(500).json({ error: true, message: 'Error updating permissions.' });
   }
 };
 
@@ -1145,11 +1359,17 @@ export const removeUserFromSheet = async (req, res) => {
       return res.status(404).json({ error: true, message: 'User does not have access to this sheet.' });
     }
 
-    // Remove permissions and userSheet in a transaction
+    // Remove permissions, column permissions and userSheet in a transaction
     await prisma.$transaction([
+      // Delete sheet permissions
       prisma.sheetPermission.deleteMany({
         where: { userSheetId: userSheet.id }
       }),
+      // Delete column permissions
+      prisma.columnPermission.deleteMany({
+        where: { userSheetId: userSheet.id }
+      }),
+      // Delete the userSheet record
       prisma.userSheet.delete({
         where: { id: userSheet.id }
       })
@@ -1164,5 +1384,7 @@ export const removeUserFromSheet = async (req, res) => {
     res.status(500).json({ error: true, message: 'Error removing user from sheet.' });
   }
 };
+
+
 
 
