@@ -164,14 +164,33 @@ export const getAllUsers = async (req, res) => {
   }
 };
 
+export const getAllUserEmails = async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        name: true
+      }
+    });
+
+    res.json({
+      error: false,
+      emails: users
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: true, message: 'Error fetching user emails' });
+  }
+};
 // Add update user function
 export const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, role } = req.body;
+    const { name, email, role, password } = req.body;
 
     // Validate input
-    if (!name && !email && !role) {
+    if (!name && !email && !role && !password) {
       return res.status(400).json({ error: true, message: 'At least one field to update is required' });
     }
 
@@ -195,14 +214,23 @@ export const updateUser = async (req, res) => {
       }
     }
 
+    // Prepare update data
+    const updateData = {
+      ...(name && { name }),
+      ...(email && { email }),
+      ...(role && { role })
+    };
+
+    // If password is provided, hash it before updating
+    if (password) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateData.password = hashedPassword;
+    }
+
     // Update user
     const updatedUser = await prisma.user.update({
       where: { id: parseInt(id) },
-      data: {
-        ...(name && { name }),
-        ...(email && { email }),
-        ...(role && { role })
-      }
+      data: updateData
     });
 
     // Remove password from response

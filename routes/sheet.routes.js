@@ -25,6 +25,7 @@ router.put('/remove-access/:id', controller.removeUserFromSheet);
 router.delete('/:id', controller.deleteSheet);
 router.put('/:id/columns/file-type', controller.attachFileType);
 router.put('/:id/columns/attach-calendar', controller.attachCalendar);
+router.put('/:id/columns/attach-email', controller.attachEmail);
 
 
 export default router;

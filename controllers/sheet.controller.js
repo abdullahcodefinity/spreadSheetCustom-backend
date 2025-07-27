@@ -810,6 +810,77 @@ export const attachCalendar = async (req, res) => {
   }
 };
 
+export const attachEmail = async (req, res) => {
+  try {
+    const { id: sheetId } = req.params;
+    const { columnName, action = 'attach' } = req.body; // action can be 'attach' or 'remove'
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Check if user is SuperAdmin or has update column permission
+    if (userRole !== 'SuperAdmin') {
+      const userSheet = await prisma.userSheet.findFirst({
+        where: {
+          userId: userId,
+          sheetId: Number(sheetId)
+        },
+        include: {
+          permissions: true
+        }
+      });
+      if (!userSheet) {
+        return res.status(403).json({ message: "You do not have access to this sheet" });
+      }
+      const hasUpdatePermission = userSheet.permissions.some(p => p.type === 'updateColumn');
+      if (!hasUpdatePermission) {
+        return res.status(403).json({ message: "You do not have permission to update columns" });
+      }
+    }
+
+    // Get the current sheet
+    const sheet = await prisma.sheet.findUnique({
+      where: { id: Number(sheetId) },
+      select: {
+        columns: true,
+        columnsMeta: true
+      }
+    });
+    if (!sheet) {
+      return res.status(404).json({ message: "Sheet not found" });
+    }
+    let columnsMeta = sheet.columnsMeta || {};
+    if (action === 'attach') {
+      // Attach email to the column
+      columnsMeta[columnName] = {
+        ...columnsMeta[columnName],
+        email: true
+      };
+    } else if (action === 'remove') {
+      // Remove email from the column
+      if (columnsMeta[columnName]) {
+        delete columnsMeta[columnName].email;
+        // If the column meta is now empty, remove the column meta entirely
+        if (Object.keys(columnsMeta[columnName]).length === 0) {
+          delete columnsMeta[columnName];
+        }
+      }
+    }
+    // Update the sheet with new columnsMeta
+    const updatedSheet = await prisma.sheet.update({
+      where: { id: Number(sheetId) },
+      data: { columnsMeta }
+    });
+    res.json({
+      error: false,
+      data: updatedSheet,
+      message: action === 'attach' ? "Email functionality attached successfully" : "Email functionality removed successfully"
+    });
+  } catch (error) {
+    console.error("Error attaching email functionality:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 export const attachDropdown = async (req, res) => {
   try {
     const { id: sheetId } = req.params;
