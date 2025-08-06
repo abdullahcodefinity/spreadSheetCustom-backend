@@ -39,7 +39,6 @@ import {
       if (Buffer.isBuffer(fileSource)) {
         body = fileSource;
       } else {
-        const fs = require('fs');
         body = fs.createReadStream(fileSource);
       }
   
@@ -54,8 +53,8 @@ import {
       }));
   
       // Cleanup local file if fileSource is a path
-      if (typeof fileSource === 'string' && require('fs').existsSync(fileSource)) {
-        require('fs').unlink(fileSource, err => err
+      if (typeof fileSource === 'string' && fs.existsSync(fileSource)) {
+        fs.unlink(fileSource, err => err
           ? console.error('Error deleting local file:', err)
           : console.log('Temporary file deleted successfully.')
         );

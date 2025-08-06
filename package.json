@@ -7,7 +7,10 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed": "node prisma/seed.mjs"
+    "seed": "node prisma/seed.mjs",
+    "backup": "node scripts/backup/dbBackup.js",
+    "backup:test": "node scripts/backup/test.js",
+    "backup:scheduler": "node scripts/backup/scheduler.js"
   },
   "keywords": [],
   "author": "",
@@ -24,6 +27,7 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.1",
+    "node-schedule": "^2.1.1",
     "prisma": "^6.9.0"
   },
   "devDependencies": {
