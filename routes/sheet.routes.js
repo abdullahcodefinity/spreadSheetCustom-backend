@@ -26,6 +26,7 @@ router.delete('/:id', controller.deleteSheet);
 router.put('/:id/columns/file-type', controller.attachFileType);
 router.put('/:id/columns/attach-calendar', controller.attachCalendar);
 router.put('/:id/columns/attach-email', controller.attachEmail);
+router.put('/:id/columns/attach-formula', controller.attachFormula);
 
 
 export default router;

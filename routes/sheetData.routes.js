@@ -15,6 +15,7 @@ router.get('/:spreadsheetId', controller.getSheetRows);
 router.put('/:spreadsheetId/position/:position', controller.updateSheetRowByPosition);
 router.put('/:spreadsheetId/move', controller.moveSheetRow);
 router.delete('/:sheetId/position/:position', controller.deleteSheetRow);
+router.put('/bulk-update', controller.updateSheetRowsBulk);
 // Add this route for file upload to a specific cell in a row
 router.post('/:spreadsheetId/row/upload', fileUploadMiddleware, uploadFileAndSaveUrl);
 router.post("/:spreadsheetId/remove-file", removeFileFromCell);

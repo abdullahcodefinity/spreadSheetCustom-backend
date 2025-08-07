@@ -522,3 +522,109 @@ export const deleteSheetRow = async (req, res) => {
   res.status(500).json({ error: error.message });
  }
 };
+
+// Bulk update rows in a sheet
+export const updateSheetRowsBulk = async (req, res) => {
+  try {
+    const { spreadsheetId, updates } = req.body;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    if (!spreadsheetId || !Array.isArray(updates) || updates.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "spreadsheetId and non-empty updates array are required." });
+    }
+
+    // Check if user has access to this sheet
+    if (userRole !== "SuperAdmin") {
+      const hasAccess = await checkSheetPermission(
+        prisma,
+        userId,
+        parseInt(spreadsheetId),
+        "updateRow"
+      );
+      if (!hasAccess) {
+        return res
+          .status(403)
+          .json({
+            error: "You do not have permission to update rows in this sheet.",
+          });
+      }
+    }
+
+    // Fetch the target sheet
+    const sheet = await prisma.sheet.findUnique({
+      where: { id: parseInt(spreadsheetId) },
+    });
+
+    if (!sheet) {
+      return res.status(404).json({ error: "Sheet not found." });
+    }
+
+    // Validate all rows have correct length
+    for (const update of updates) {
+      if (!Array.isArray(update.row) || sheet.columns.length !== update.row.length) {
+        return res.status(400).json({
+          error: `All rows must have exactly ${sheet.columns.length} values to match the columns.`,
+        });
+      }
+    }
+
+    // Get all existing rows
+    const existingRows = await prisma.sheetData.findMany({
+      where: {
+        spreadsheetId: parseInt(spreadsheetId),
+      },
+    });
+
+    // Create a map of position to row ID for faster lookups
+    const positionToRowId = {};
+    existingRows.forEach(row => {
+      positionToRowId[row.position] = row.id;
+    });
+
+    // Process updates in a transaction
+    const results = await prisma.$transaction(async (tx) => {
+      const updateResults = [];
+
+      for (const update of updates) {
+        const { position, row } = update;
+        
+        // Check if row exists at this position
+        if (positionToRowId[position] !== undefined) {
+          // Update existing row
+          const updatedRow = await tx.sheetData.update({
+            where: { id: positionToRowId[position] },
+            data: { row },
+          });
+          updateResults.push(updatedRow);
+        } else {
+          // Create new row
+          const newRow = await tx.sheetData.create({
+            data: {
+              position,
+              row,
+              sheet: {
+                connect: {
+                  id: parseInt(spreadsheetId),
+                },
+              },
+            },
+          });
+          updateResults.push(newRow);
+        }
+      }
+
+      return updateResults;
+    });
+
+    res.status(200).json({
+      message: `Successfully processed ${results.length} row updates`,
+      results
+    });
+  } catch (error) {
+    console.error("Error updating rows in bulk:", error);
+    res.status(500).json({ error: error.message || "Internal server error" });
+  }
+};
