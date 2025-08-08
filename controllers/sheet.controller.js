@@ -1100,6 +1100,120 @@ export const attachFormula = async (req, res) => {
  }
 };
 
+
+
+export const updateFormulas = async (req, res) => {
+  try {
+   const { id: sheetId } = req.params;
+   const { formulas, operation, operationData } = req.body;
+   const userId = req.user.userId;
+   const userRole = req.user.role;
+ 
+   // Check if user is SuperAdmin or has update column permission
+   if (userRole !== "SuperAdmin") {
+    const userSheet = await prisma.userSheet.findFirst({
+     where: {
+      userId: userId,
+      sheetId: Number(sheetId),
+     },
+     include: {
+      permissions: true,
+     },
+    });
+    if (!userSheet) {
+     return res
+      .status(403)
+      .json({ message: "You do not have access to this sheet" });
+    }
+    const hasUpdatePermission = userSheet.permissions.some(
+     (p) => p.type === "updateColumn"
+    );
+    if (!hasUpdatePermission) {
+     return res
+      .status(403)
+      .json({ message: "You do not have permission to update columns" });
+    }
+   }
+ 
+   // Validate input
+   if (!formulas || typeof formulas !== 'object') {
+    return res.status(400).json({ message: "Formulas object is required" });
+   }
+ 
+   if (!operation || !operationData) {
+    return res.status(400).json({ message: "Operation and operationData are required" });
+   }
+ 
+   // Get the current sheet
+   const sheet = await prisma.sheet.findUnique({
+    where: { id: Number(sheetId) },
+    select: {
+     columns: true,
+     columnsMeta: true,
+    },
+   });
+   
+   if (!sheet) {
+    return res.status(404).json({ message: "Sheet not found" });
+   }
+ 
+   let columnsMeta = sheet.columnsMeta || {};
+ 
+   // Handle different operations
+   if (operation === "rename") {
+    const { oldName, newName } = operationData;
+    
+    if (!oldName || !newName) {
+     return res.status(400).json({ message: "oldName and newName are required for rename operation" });
+    }
+ 
+    // Update all formulas that reference the renamed column
+    Object.keys(formulas).forEach(columnName => {
+     if (columnsMeta[columnName] && columnsMeta[columnName].formula) {
+      // Update the formula in columnsMeta with the new formula from the request
+      columnsMeta[columnName].formula = formulas[columnName];
+     }
+    });
+   } else if (operation === "move") {
+
+    
+
+ 
+    // Update all formulas that reference columns by index
+    Object.keys(formulas).forEach(columnName => {
+     if (columnsMeta[columnName] && columnsMeta[columnName].formula) {
+      // Update the formula in columnsMeta with the new formula from the request
+      columnsMeta[columnName].formula = formulas[columnName];
+     } else if (formulas[columnName]) {
+      // If this is a new formula, add it to columnsMeta
+      columnsMeta[columnName] = {
+       ...(columnsMeta[columnName] || {}),
+       formula: formulas[columnName]
+      };
+     }
+    });
+   }
+ 
+   // Update the sheet with new columnsMeta
+   const updatedSheet = await prisma.sheet.update({
+    where: { id: Number(sheetId) },
+    data: { columnsMeta },
+   });
+ 
+   res.json({
+    error: false,
+    data: updatedSheet,
+    updatedFormulas: formulas,
+    message: `Formulas updated successfully after ${operation} operation`,
+   });
+  } catch (error) {
+   console.error("Error updating formulas:", error);
+   res.status(500).json({ message: "Internal server error" });
+  }
+ };
+
+
+
 export const attachDropdown = async (req, res) => {
  try {
   const { id: sheetId } = req.params;
