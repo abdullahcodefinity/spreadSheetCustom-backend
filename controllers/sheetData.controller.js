@@ -344,6 +344,77 @@ export const updateSheetRowByPosition = async (req, res) => {
  }
 };
 
+// Update a row by ID
+export const updateSheetRowById = async (req, res) => {
+ try {
+  const { spreadsheetId, rowId } = req.params;
+  const { row } = req.body;
+  const userId = req.user.userId;
+  const userRole = req.user.role;
+
+  if (!Array.isArray(row)) {
+   return res.status(400).json({ error: "Row data must be an array." });
+  }
+
+  // Check if user has access to this sheet
+  if (userRole !== "SuperAdmin") {
+   const hasAccess = await checkSheetPermission(
+    prisma,
+    userId,
+    parseInt(spreadsheetId),
+    "updateRow"
+   );
+   if (!hasAccess) {
+    return res
+     .status(403)
+     .json({
+      error: "You do not have permission to update rows in this sheet.",
+     });
+   }
+  }
+
+  // First check if the row exists with given ID and belongs to the correct sheet
+  const existingRow = await prisma.sheetData.findFirst({
+   where: {
+    id: parseInt(rowId),
+    spreadsheetId: parseInt(spreadsheetId),
+   },
+  });
+
+  if (!existingRow) {
+   return res
+    .status(404)
+    .json({ error: "Row not found with the specified ID in this sheet" });
+  }
+
+  // Get the sheet to validate row length
+  const sheet = await prisma.sheet.findUnique({
+   where: { id: parseInt(spreadsheetId) },
+  });
+
+  if (!sheet) {
+   return res.status(404).json({ error: "Sheet not found" });
+  }
+
+  // Validate row length matches column length
+  if (sheet.columns.length !== row.length) {
+   return res.status(400).json({
+    error: `Row must have exactly ${sheet.columns.length} values to match the columns.`,
+   });
+  }
+
+  const updatedRow = await prisma.sheetData.update({
+   where: { id: parseInt(rowId) },
+   data: { row },
+  });
+
+  res.json(updatedRow);
+ } catch (error) {
+  console.error(error);
+  res.status(500).json({ error: error.message });
+ }
+};
+
 // Move a row to a new position
 export const moveSheetRow = async (req, res) => {
  try {
