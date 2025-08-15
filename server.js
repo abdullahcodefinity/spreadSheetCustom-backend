@@ -21,6 +21,7 @@ app.use((req, res, next) => {
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 app.use('/api/sheets', sheetRoutes);
 app.use('/api/sheet-data', sheetDataRoutes);
